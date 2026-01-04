@@ -1,0 +1,38 @@
+[package]
+name = "mycel"
+version = "0.1.0"
+edition = "2021"
+description = "The network beneath your code - parallel Claude Code sessions via git worktrees"
+license = "MIT"
+repository = "https://github.com/jaredszi/mycel"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Config
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+dirs = "5"
+
+# Utils
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
