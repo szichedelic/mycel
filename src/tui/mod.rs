@@ -882,6 +882,21 @@ pub async fn run() -> Result<()> {
                                                         &session_name,
                                                     )
                                                     .ok();
+                                                    let metadata = bank::BankMetadata::new(
+                                                        project_name.clone(),
+                                                        session_name.clone(),
+                                                        session.session.note.clone(),
+                                                        Some(session.session.created_at_unix),
+                                                    );
+                                                    if let Err(err) = bank::write_metadata(
+                                                        &project_name,
+                                                        &session_name,
+                                                        &metadata,
+                                                    ) {
+                                                        println!(
+                                                            "Warning: failed to write bank metadata: {err}"
+                                                        );
+                                                    }
 
                                                     if app
                                                         .session_manager
@@ -972,6 +987,7 @@ pub async fn run() -> Result<()> {
                                                 );
                                             } else {
                                                 bank::delete_bundle(&bundle_path)?;
+                                                bank::delete_metadata(&project_name, &item_name)?;
 
                                                 let config = ProjectConfig::load(&git_root)?;
                                                 println!("Creating worktree...");
@@ -1013,6 +1029,202 @@ pub async fn run() -> Result<()> {
                                     }
                                 }
                             }
+                            KeyCode::Char('e') => {
+                                if let Some(SelectedItem::Banked(project_name, item)) =
+                                    app.get_selected_item()
+                                {
+                                    let project_name = project_name.to_string();
+                                    let item_name = item.name.clone();
+                                    let bundle_path = item.path.clone();
+
+                                    disable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        LeaveAlternateScreen,
+                                        DisableMouseCapture
+                                    )?;
+
+                                    let default_path = std::env::current_dir()
+                                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                        .join(format!(
+                                            "{project_name}-{item_name}.mycel-bank.tar.gz"
+                                        ));
+
+                                    print!(
+                                        "Export path (default: {}): ",
+                                        default_path.display()
+                                    );
+                                    io::stdout().flush()?;
+                                    let mut output = String::new();
+                                    io::stdin().read_line(&mut output)?;
+                                    let output = output.trim();
+                                    let output_path = if output.is_empty() {
+                                        default_path
+                                    } else {
+                                        std::path::PathBuf::from(output)
+                                    };
+
+                                    if let Some(parent) = output_path.parent() {
+                                        if let Err(err) = std::fs::create_dir_all(parent) {
+                                            println!(
+                                                "Error creating export directory: {err}"
+                                            );
+                                            std::thread::sleep(
+                                                std::time::Duration::from_millis(1000),
+                                            );
+                                        } else {
+                                            let metadata =
+                                                match bank::read_metadata(&project_name, &item_name)
+                                                {
+                                                    Ok(Some(metadata)) => metadata,
+                                                    Ok(None) => bank::BankMetadata::new(
+                                                        project_name.clone(),
+                                                        item_name.clone(),
+                                                        None,
+                                                        None,
+                                                    ),
+                                                    Err(err) => {
+                                                        println!(
+                                                            "Error reading metadata: {err}"
+                                                        );
+                                                        std::thread::sleep(
+                                                            std::time::Duration::from_millis(1000),
+                                                        );
+                                                        enable_raw_mode()?;
+                                                        execute!(
+                                                            terminal.backend_mut(),
+                                                            EnterAlternateScreen,
+                                                            EnableMouseCapture
+                                                        )?;
+                                                        terminal.clear()?;
+                                                        app.refresh()?;
+                                                        continue;
+                                                    }
+                                                };
+
+                                            match bank::export_bundle(
+                                                &bundle_path,
+                                                &metadata,
+                                                &output_path,
+                                            ) {
+                                                Ok(_) => {
+                                                    println!(
+                                                        "Exported bank to {}",
+                                                        output_path.display()
+                                                    );
+                                                    std::thread::sleep(
+                                                        std::time::Duration::from_millis(800),
+                                                    );
+                                                }
+                                                Err(err) => {
+                                                    println!("Error exporting bank: {err}");
+                                                    std::thread::sleep(
+                                                        std::time::Duration::from_millis(1200),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    enable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        EnterAlternateScreen,
+                                        EnableMouseCapture
+                                    )?;
+                                    terminal.clear()?;
+                                    app.refresh()?;
+                                }
+                            }
+                            KeyCode::Char('i') => {
+                                let project = match app.get_selected_item() {
+                                    Some(SelectedItem::Project(p)) => Some(&p.project),
+                                    Some(SelectedItem::Session(p, _)) => Some(&p.project),
+                                    Some(SelectedItem::Banked(project_name, _)) => app
+                                        .projects
+                                        .iter()
+                                        .find(|p| p.project.name == project_name)
+                                        .map(|p| &p.project),
+                                    _ => None,
+                                };
+
+                                if let Some(project) = project {
+                                    let project_name = project.name.clone();
+
+                                    disable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        LeaveAlternateScreen,
+                                        DisableMouseCapture
+                                    )?;
+
+                                    print!("Import file path: ");
+                                    io::stdout().flush()?;
+                                    let mut input = String::new();
+                                    io::stdin().read_line(&mut input)?;
+                                    let input = input.trim();
+                                    if input.is_empty() {
+                                        enable_raw_mode()?;
+                                        execute!(
+                                            terminal.backend_mut(),
+                                            EnterAlternateScreen,
+                                            EnableMouseCapture
+                                        )?;
+                                        terminal.clear()?;
+                                        app.refresh()?;
+                                        continue;
+                                    }
+
+                                    print!("Session name override (optional): ");
+                                    io::stdout().flush()?;
+                                    let mut name_input = String::new();
+                                    io::stdin().read_line(&mut name_input)?;
+                                    let name_input = name_input.trim();
+                                    let name_override = if name_input.is_empty() {
+                                        None
+                                    } else {
+                                        Some(name_input.to_string())
+                                    };
+
+                                    let force = confirm::prompt_confirm(
+                                        "Overwrite existing bundle if it exists?",
+                                    )?;
+
+                                    match bank::import_bundle(
+                                        std::path::Path::new(input),
+                                        &project_name,
+                                        name_override.as_deref(),
+                                        force,
+                                    ) {
+                                        Ok(imported) => {
+                                            println!(
+                                                "Imported bank '{}' to {}",
+                                                imported.session_name,
+                                                imported.bundle_path.display()
+                                            );
+                                            std::thread::sleep(
+                                                std::time::Duration::from_millis(800),
+                                            );
+                                        }
+                                        Err(err) => {
+                                            println!("Error importing bank: {err}");
+                                            std::thread::sleep(
+                                                std::time::Duration::from_millis(1200),
+                                            );
+                                        }
+                                    }
+
+                                    enable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        EnterAlternateScreen,
+                                        EnableMouseCapture
+                                    )?;
+                                    terminal.clear()?;
+                                    app.refresh()?;
+                                }
+                            }
+
                             _ => {}
                         }
                     }
@@ -1471,7 +1683,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     let mut footer_text = if app.history_mode {
         " [h] sessions  [r]efresh  [/] search  [q]uit".to_string()
     } else {
-        " [a]ttach  [s]pawn  [n]ote  [p]ause  [v]iew  [b]ank  [u]nbank  [x] kill  [h]istory  [r]efresh  [/] search  [q]uit"
+        " [a]ttach  [s]pawn  [n]ote  [p]ause  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [r]efresh  [/] search  [q]uit"
             .to_string()
     };
     if app.search_mode || !app.search_query.is_empty() {
