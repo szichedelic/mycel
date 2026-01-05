@@ -60,6 +60,15 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
     println!("Banking '{name}'...");
     bank::create_bundle(&git_root, name, &config.base_branch, &bundle_path)?;
     println!("Bundle saved: {}", bundle_path.display());
+    let metadata = bank::BankMetadata::new(
+        project.name.clone(),
+        session.name.clone(),
+        session.note.clone(),
+        Some(session.created_at_unix),
+    );
+    if let Err(err) = bank::write_metadata(&project.name, &session.name, &metadata) {
+        eprintln!("Warning: failed to write bank metadata: {err}");
+    }
 
     // Kill session and remove worktree unless --keep
     if !keep {

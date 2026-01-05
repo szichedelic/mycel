@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 mod bank;
 mod cli;
@@ -90,6 +91,25 @@ enum Commands {
     },
     /// List banked sessions
     Banked,
+    /// Export a banked session to a portable archive
+    BankExport {
+        /// Name of the banked session
+        name: String,
+        /// Output path for the archive
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Import a banked session from a portable archive
+    BankImport {
+        /// Path to the archive file
+        path: PathBuf,
+        /// Optional session name override
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Overwrite existing bundle
+        #[arg(long)]
+        force: bool,
+    },
     /// Send desktop notifications for session events
     Notify {
         /// Poll interval in seconds
@@ -125,6 +145,12 @@ async fn main() -> Result<()> {
             cli::unbank::run(&name, spawn, force).await
         }
         Some(Commands::Banked) => cli::banked::run().await,
+        Some(Commands::BankExport { name, output }) => {
+            cli::bank_export::run(&name, output).await
+        }
+        Some(Commands::BankImport { path, name, force }) => {
+            cli::bank_import::run(&path, name.as_deref(), force).await
+        }
         Some(Commands::Notify { interval }) => cli::notify::run(interval).await,
     }
 }

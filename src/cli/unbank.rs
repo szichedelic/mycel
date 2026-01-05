@@ -40,6 +40,7 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
     bank::restore_bundle(&git_root, &bundle_path, name)?;
 
     bank::delete_bundle(&bundle_path)?;
+    bank::delete_metadata(&project.name, name)?;
     println!("Bundle removed from bank.");
 
     if spawn {

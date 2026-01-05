@@ -32,6 +32,8 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 fuzzy-matcher = "0.3"
 libc = "0.2"
+flate2 = "1"
+tar = "0.4"
 
 [profile.release]
 lto = true
