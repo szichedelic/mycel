@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod bank;
+mod confirm;
 mod cli;
 mod config;
 mod db;
@@ -43,6 +44,9 @@ enum Commands {
         /// Also remove the worktree
         #[arg(short, long)]
         remove: bool,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
     },
     /// Bank a completed session (bundle commits for later)
     Bank {
@@ -51,6 +55,9 @@ enum Commands {
         /// Keep the session running (don't kill/remove)
         #[arg(short, long)]
         keep: bool,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
     },
     /// Restore a banked session
     Unbank {
@@ -59,6 +66,9 @@ enum Commands {
         /// Also spawn a new session
         #[arg(short, long)]
         spawn: bool,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
     },
     /// List banked sessions
     Banked,
@@ -77,9 +87,9 @@ async fn main() -> Result<()> {
         Some(Commands::Spawn { name }) => cli::spawn::run(&name).await,
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,
-        Some(Commands::Kill { name, remove }) => cli::kill::run(&name, remove).await,
-        Some(Commands::Bank { name, keep }) => cli::bank::run(&name, keep).await,
-        Some(Commands::Unbank { name, spawn }) => cli::unbank::run(&name, spawn).await,
+        Some(Commands::Kill { name, remove, force }) => cli::kill::run(&name, remove, force).await,
+        Some(Commands::Bank { name, keep, force }) => cli::bank::run(&name, keep, force).await,
+        Some(Commands::Unbank { name, spawn, force }) => cli::unbank::run(&name, spawn, force).await,
         Some(Commands::Banked) => cli::banked::run().await,
     }
 }

@@ -2,12 +2,13 @@ use anyhow::{bail, Context, Result};
 use std::env;
 
 use crate::bank;
+use crate::confirm;
 use crate::config::ProjectConfig;
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::worktree;
 
-pub async fn run(name: &str, spawn: bool) -> Result<()> {
+pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
     let current_dir = env::current_dir().context("Failed to get current directory")?;
     let git_root = worktree::find_git_root(&current_dir)?;
 
@@ -25,6 +26,17 @@ pub async fn run(name: &str, spawn: bool) -> Result<()> {
 
     println!("Verifying bundle...");
     bank::verify_bundle(&bundle_path)?;
+
+    if !force {
+        let prompt = format!(
+            "Unbanking '{}' will restore the branch and delete the bundle. Continue?",
+            name
+        );
+        if !confirm::prompt_confirm(&prompt)? {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
 
     println!("Restoring branch '{}'...", name);
     bank::restore_bundle(&git_root, &bundle_path, name)?;
