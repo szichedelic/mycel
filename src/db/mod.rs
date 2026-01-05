@@ -20,6 +20,7 @@ pub struct Session {
     pub name: String,
     pub worktree_path: PathBuf,
     pub tmux_session: String,
+    pub created_at_unix: i64,
 }
 
 impl Database {
@@ -63,6 +64,28 @@ impl Database {
             );
             ",
         )?;
+
+        self.ensure_sessions_created_at()?;
+        Ok(())
+    }
+
+    fn ensure_sessions_created_at(&self) -> Result<()> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'created_at'",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if count == 0 {
+            self.conn.execute(
+                "ALTER TABLE sessions ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP",
+                [],
+            )?;
+            self.conn.execute(
+                "UPDATE sessions SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL",
+                [],
+            )?;
+        }
 
         Ok(())
     }
@@ -129,7 +152,8 @@ impl Database {
 
     pub fn get_session_by_name(&self, project_id: i64, name: &str) -> Result<Option<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, name, worktree_path, tmux_session FROM sessions WHERE project_id = ?1 AND name = ?2",
+            "SELECT id, project_id, name, worktree_path, tmux_session, CAST(strftime('%s', created_at) AS INTEGER)
+             FROM sessions WHERE project_id = ?1 AND name = ?2",
         )?;
 
         let result = stmt.query_row(params![project_id, name], |row| {
@@ -139,6 +163,7 @@ impl Database {
                 name: row.get(2)?,
                 worktree_path: PathBuf::from(row.get::<_, String>(3)?),
                 tmux_session: row.get(4)?,
+                created_at_unix: row.get(5)?,
             })
         });
 
@@ -151,7 +176,8 @@ impl Database {
 
     pub fn list_sessions(&self, project_id: i64) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, name, worktree_path, tmux_session FROM sessions WHERE project_id = ?1",
+            "SELECT id, project_id, name, worktree_path, tmux_session, CAST(strftime('%s', created_at) AS INTEGER)
+             FROM sessions WHERE project_id = ?1",
         )?;
 
         let sessions = stmt
@@ -162,6 +188,7 @@ impl Database {
                     name: row.get(2)?,
                     worktree_path: PathBuf::from(row.get::<_, String>(3)?),
                     tmux_session: row.get(4)?,
+                    created_at_unix: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -171,7 +198,8 @@ impl Database {
 
     pub fn list_all_sessions(&self) -> Result<Vec<(Project, Session)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT p.id, p.name, p.path, s.id, s.project_id, s.name, s.worktree_path, s.tmux_session
+            "SELECT p.id, p.name, p.path, s.id, s.project_id, s.name, s.worktree_path, s.tmux_session,
+                    CAST(strftime('%s', s.created_at) AS INTEGER)
              FROM sessions s
              JOIN projects p ON s.project_id = p.id
              ORDER BY p.name, s.name",
@@ -190,6 +218,7 @@ impl Database {
                     name: row.get(5)?,
                     worktree_path: PathBuf::from(row.get::<_, String>(6)?),
                     tmux_session: row.get(7)?,
+                    created_at_unix: row.get(8)?,
                 };
                 Ok((project, session))
             })?
