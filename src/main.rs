@@ -53,6 +53,14 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Stop a session without removing its worktree
+    Stop {
+        /// Name of the session to stop
+        name: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
     /// Bank a completed session (bundle commits for later)
     Bank {
         /// Name of the session to bank
@@ -103,6 +111,7 @@ async fn main() -> Result<()> {
             remove,
             force,
         }) => cli::kill::run(&name, remove, force).await,
+        Some(Commands::Stop { name, force }) => cli::stop::run(&name, force).await,
         Some(Commands::Bank { name, keep, force }) => cli::bank::run(&name, keep, force).await,
         Some(Commands::Unbank { name, spawn, force }) => {
             cli::unbank::run(&name, spawn, force).await
