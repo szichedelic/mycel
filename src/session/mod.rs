@@ -29,8 +29,14 @@ impl SessionManager {
     }
 
     /// Create a new tmux session with Claude Code running in the given worktree
-    pub fn create(&self, project_name: &str, session_name: &str, worktree_path: &Path, setup_commands: &[String]) -> Result<String> {
-        let tmux_session_name = format!("mycel-{}-{}", project_name, session_name);
+    pub fn create(
+        &self,
+        project_name: &str,
+        session_name: &str,
+        worktree_path: &Path,
+        setup_commands: &[String],
+    ) -> Result<String> {
+        let tmux_session_name = format!("mycel-{project_name}-{session_name}");
 
         // Create tmux session in detached mode, starting in the worktree directory
         let status = Command::new("tmux")
@@ -56,15 +62,10 @@ impl SessionManager {
         } else {
             setup_commands.join(" && ") + " && "
         };
-        let logo_cmd = format!("{}clear && printf '{}' && sleep 1.5 && clear && claude", setup_str, logo_escaped);
+        let logo_cmd =
+            format!("{setup_str}clear && printf '{logo_escaped}' && sleep 1.5 && clear && claude");
         let status = Command::new("tmux")
-            .args([
-                "send-keys",
-                "-t",
-                &tmux_session_name,
-                &logo_cmd,
-                "Enter",
-            ])
+            .args(["send-keys", "-t", &tmux_session_name, &logo_cmd, "Enter"])
             .status()
             .context("Failed to start Claude in tmux session")?;
 
@@ -112,36 +113,4 @@ impl SessionManager {
 
         Ok(())
     }
-
-    /// Get session info (for TUI display)
-    pub fn get_info(&self, tmux_session: &str) -> Result<SessionInfo> {
-        // Get pane content (last few lines) for preview
-        let output = Command::new("tmux")
-            .args([
-                "capture-pane",
-                "-t",
-                tmux_session,
-                "-p",
-                "-S",
-                "-10", // Last 10 lines
-            ])
-            .output()
-            .context("Failed to capture tmux pane")?;
-
-        let last_output = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter(|l| !l.is_empty())
-            .map(|s| s.to_string())
-            .collect();
-
-        Ok(SessionInfo {
-            is_running: self.is_alive(tmux_session)?,
-            last_output,
-        })
-    }
-}
-
-pub struct SessionInfo {
-    pub is_running: bool,
-    pub last_output: Vec<String>,
 }
