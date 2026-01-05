@@ -3,8 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::config::ProjectConfig;
-
 /// Get the bank directory for a project
 pub fn bank_dir(project_name: &str) -> Result<PathBuf> {
     let base = dirs::home_dir()
@@ -19,7 +17,7 @@ pub fn bank_dir(project_name: &str) -> Result<PathBuf> {
 
 /// Get the bundle path for a banked session
 pub fn bundle_path(project_name: &str, session_name: &str) -> Result<PathBuf> {
-    Ok(bank_dir(project_name)?.join(format!("{}.bundle", session_name)))
+    Ok(bank_dir(project_name)?.join(format!("{session_name}.bundle")))
 }
 
 /// Create a git bundle from a branch
@@ -31,7 +29,11 @@ pub fn create_bundle(
 ) -> Result<()> {
     // Check if there are commits to bundle
     let output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", base_branch, branch_name)])
+        .args([
+            "rev-list",
+            "--count",
+            &format!("{base_branch}..{branch_name}"),
+        ])
         .current_dir(git_root)
         .output()
         .context("Failed to check commit count")?;
@@ -51,7 +53,7 @@ pub fn create_bundle(
             "bundle",
             "create",
             &bundle_path.to_string_lossy(),
-            &format!("{}..{}", base_branch, branch_name),
+            &format!("{base_branch}..{branch_name}"),
         ])
         .current_dir(git_root)
         .status()
@@ -61,7 +63,7 @@ pub fn create_bundle(
         bail!("git bundle create failed");
     }
 
-    println!("Banked {} commits", count);
+    println!("Banked {count} commits");
     Ok(())
 }
 
@@ -86,7 +88,7 @@ pub fn restore_bundle(git_root: &Path, bundle_path: &Path, branch_name: &str) ->
         .args([
             "fetch",
             &bundle_path.to_string_lossy(),
-            &format!("{}:{}", branch_name, branch_name),
+            &format!("{branch_name}:{branch_name}"),
         ])
         .current_dir(git_root)
         .status()
@@ -118,11 +120,7 @@ pub fn list_banked(project_name: &str) -> Result<Vec<BankedItem>> {
                 let metadata = fs::metadata(&path)?;
                 let size = metadata.len();
 
-                items.push(BankedItem {
-                    name,
-                    path,
-                    size,
-                });
+                items.push(BankedItem { name, path, size });
             }
         }
     }
