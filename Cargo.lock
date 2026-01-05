@@ -515,6 +515,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "fuzzy-matcher",
+ "libc",
  "ratatui",
  "rusqlite",
  "serde",

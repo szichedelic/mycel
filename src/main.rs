@@ -6,6 +6,7 @@ mod cli;
 mod config;
 mod confirm;
 mod db;
+mod disk;
 mod session;
 mod tui;
 mod worktree;
