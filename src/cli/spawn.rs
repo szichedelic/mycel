@@ -21,7 +21,7 @@ fn branch_exists(git_root: &std::path::Path, branch_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub async fn run(name: &str) -> Result<()> {
+pub async fn run(name: &str, note: Option<&str>) -> Result<()> {
     let current_dir = env::current_dir().context("Failed to get current directory")?;
     let git_root = worktree::find_git_root(&current_dir)?;
 
@@ -58,7 +58,13 @@ pub async fn run(name: &str) -> Result<()> {
     let tmux_session =
         session_manager.create(&project.name, &branch_name, &worktree_path, &config.setup)?;
 
-    db.add_session(project.id, &branch_name, &worktree_path, &tmux_session)?;
+    db.add_session(
+        project.id,
+        &branch_name,
+        &worktree_path,
+        &tmux_session,
+        note,
+    )?;
 
     println!("\nSession '{branch_name}' created. Attach with: mycel attach {branch_name}");
 

@@ -54,7 +54,13 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
         let tmux_session =
             session_manager.create(&project.name, &branch_name, &worktree_path, &config.setup)?;
 
-        db.add_session(project.id, &branch_name, &worktree_path, &tmux_session)?;
+        db.add_session(
+            project.id,
+            &branch_name,
+            &worktree_path,
+            &tmux_session,
+            None,
+        )?;
 
         println!("\nSession '{name}' restored. Attach with: mycel attach {name}");
     } else {

@@ -19,6 +19,7 @@ pub struct Session {
     pub name: String,
     pub worktree_path: PathBuf,
     pub tmux_session: String,
+    pub note: Option<String>,
     pub created_at_unix: i64,
 }
 
@@ -57,6 +58,7 @@ impl Database {
                 name TEXT NOT NULL,
                 worktree_path TEXT NOT NULL,
                 tmux_session TEXT NOT NULL,
+                note TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id),
                 UNIQUE(project_id, name)
@@ -65,6 +67,7 @@ impl Database {
         )?;
 
         self.ensure_sessions_created_at()?;
+        self.ensure_sessions_note()?;
         Ok(())
     }
 
@@ -84,6 +87,21 @@ impl Database {
                 "UPDATE sessions SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL",
                 [],
             )?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_sessions_note(&self) -> Result<()> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'note'",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if count == 0 {
+            self.conn
+                .execute("ALTER TABLE sessions ADD COLUMN note TEXT", [])?;
         }
 
         Ok(())
@@ -140,10 +158,17 @@ impl Database {
         name: &str,
         worktree_path: &Path,
         tmux_session: &str,
+        note: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO sessions (project_id, name, worktree_path, tmux_session) VALUES (?1, ?2, ?3, ?4)",
-            params![project_id, name, worktree_path.to_string_lossy(), tmux_session],
+            "INSERT INTO sessions (project_id, name, worktree_path, tmux_session, note) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                project_id,
+                name,
+                worktree_path.to_string_lossy(),
+                tmux_session,
+                note
+            ],
         )?;
 
         Ok(self.conn.last_insert_rowid())
@@ -151,7 +176,7 @@ impl Database {
 
     pub fn get_session_by_name(&self, project_id: i64, name: &str) -> Result<Option<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, worktree_path, tmux_session, CAST(strftime('%s', created_at) AS INTEGER)
+            "SELECT id, name, worktree_path, tmux_session, note, CAST(strftime('%s', created_at) AS INTEGER)
              FROM sessions WHERE project_id = ?1 AND name = ?2",
         )?;
 
@@ -161,7 +186,8 @@ impl Database {
                 name: row.get(1)?,
                 worktree_path: PathBuf::from(row.get::<_, String>(2)?),
                 tmux_session: row.get(3)?,
-                created_at_unix: row.get(4)?,
+                note: row.get(4)?,
+                created_at_unix: row.get(5)?,
             })
         });
 
@@ -174,7 +200,7 @@ impl Database {
 
     pub fn list_sessions(&self, project_id: i64) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, worktree_path, tmux_session, CAST(strftime('%s', created_at) AS INTEGER)
+            "SELECT id, name, worktree_path, tmux_session, note, CAST(strftime('%s', created_at) AS INTEGER)
              FROM sessions WHERE project_id = ?1",
         )?;
 
@@ -185,7 +211,8 @@ impl Database {
                     name: row.get(1)?,
                     worktree_path: PathBuf::from(row.get::<_, String>(2)?),
                     tmux_session: row.get(3)?,
-                    created_at_unix: row.get(4)?,
+                    note: row.get(4)?,
+                    created_at_unix: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -206,6 +233,15 @@ impl Database {
     pub fn delete_session(&self, session_id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
+
+        Ok(())
+    }
+
+    pub fn update_session_note(&self, session_id: i64, note: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET note = ?1 WHERE id = ?2",
+            params![note, session_id],
+        )?;
 
         Ok(())
     }
