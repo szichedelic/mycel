@@ -179,17 +179,18 @@ pub fn resolve_backend(
 }
 
 pub fn available_backend_names(global: &GlobalConfig, project: &ProjectConfig) -> Vec<String> {
-    let mut names: BTreeSet<String> = default_backend_configs()
-        .keys()
-        .cloned()
-        .collect();
+    let mut names: BTreeSet<String> = default_backend_configs().keys().cloned().collect();
     names.extend(global.backends.keys().cloned());
     names.extend(project.backends.keys().cloned());
     names.into_iter().collect()
 }
 
 fn apply_backend_override(backend: &mut ResolvedBackend, config: &BackendConfig) {
-    if let Some(command) = config.command.as_deref().filter(|cmd| !cmd.trim().is_empty()) {
+    if let Some(command) = config
+        .command
+        .as_deref()
+        .filter(|cmd| !cmd.trim().is_empty())
+    {
         backend.command = command.to_string();
     }
     if let Some(args) = config.args.as_ref() {
@@ -198,14 +199,13 @@ fn apply_backend_override(backend: &mut ResolvedBackend, config: &BackendConfig)
 }
 
 fn default_backend(name: &str) -> Option<ResolvedBackend> {
-    default_backend_configs().get(name).map(|config| ResolvedBackend {
-        name: name.to_string(),
-        command: config
-            .command
-            .clone()
-            .unwrap_or_else(|| name.to_string()),
-        args: config.args.clone().unwrap_or_default(),
-    })
+    default_backend_configs()
+        .get(name)
+        .map(|config| ResolvedBackend {
+            name: name.to_string(),
+            command: config.command.clone().unwrap_or_else(|| name.to_string()),
+            args: config.args.clone().unwrap_or_default(),
+        })
 }
 
 fn default_backend_configs() -> BTreeMap<String, BackendConfig> {

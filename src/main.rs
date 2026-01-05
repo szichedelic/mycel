@@ -137,7 +137,13 @@ async fn main() -> Result<()> {
             template,
             backend,
         }) => {
-            cli::spawn::run(&name, note.as_deref(), template.as_deref(), backend.as_deref()).await
+            cli::spawn::run(
+                &name,
+                note.as_deref(),
+                template.as_deref(),
+                backend.as_deref(),
+            )
+            .await
         }
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,

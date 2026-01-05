@@ -1012,11 +1012,8 @@ pub async fn run() -> Result<()> {
                                                         &git_root, &item_name, &config,
                                                     )?;
 
-                                                let backend = resolve_backend(
-                                                    &global_config,
-                                                    &config,
-                                                    None,
-                                                )?;
+                                                let backend =
+                                                    resolve_backend(&global_config, &config, None)?;
                                                 println!("Starting {} session...", backend.name);
                                                 let tmux_session = app.session_manager.create(
                                                     &project_name,
