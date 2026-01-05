@@ -12,10 +12,12 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame, Terminal,
 };
-use std::io;
+use std::io::{self, Write};
 
+use crate::config::ProjectConfig;
 use crate::db::{Database, Project, Session};
 use crate::session::SessionManager;
+use crate::worktree;
 
 mod logo;
 
@@ -192,10 +194,83 @@ pub async fn run() -> Result<()> {
                                     EnterAlternateScreen,
                                     EnableMouseCapture
                                 )?;
+                                terminal.clear()?;
                                 app.refresh()?;
                             }
                         }
-                        KeyCode::Char('r') => app.refresh()?,
+                        KeyCode::Char('r') => {
+                            app.refresh()?;
+                            terminal.clear()?;
+                        }
+                        KeyCode::Char('s') => {
+                            // Get selected project
+                            if let Some(selected) = app.get_selected_item() {
+                                let project = match selected {
+                                    SelectedItem::Project(p) => &p.project,
+                                    SelectedItem::Session(p, _) => &p.project,
+                                };
+
+                                // Leave TUI to prompt for name
+                                disable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    LeaveAlternateScreen,
+                                    DisableMouseCapture
+                                )?;
+
+                                print!("Session name: ");
+                                io::stdout().flush()?;
+                                let mut name = String::new();
+                                io::stdin().read_line(&mut name)?;
+                                let name = name.trim();
+
+                                if !name.is_empty() {
+                                    let config = ProjectConfig::load(&project.path)?;
+                                    let (worktree_path, branch_name) = worktree::create(&project.path, name, &config)?;
+                                    println!("Creating worktree '{}'...", branch_name);
+
+                                    println!("Starting Claude session...");
+                                    if !config.setup.is_empty() {
+                                        println!("Setup: {}", config.setup.join(" && "));
+                                    }
+                                    let tmux_session = app.session_manager.create(&project.name, &branch_name, &worktree_path, &config.setup)?;
+                                    app.db.add_session(project.id, &branch_name, &worktree_path, &tmux_session)?;
+                                    println!("Session '{}' created.", branch_name);
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                }
+
+                                // Restore TUI
+                                enable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    EnterAlternateScreen,
+                                    EnableMouseCapture
+                                )?;
+                                terminal.clear()?;
+                                app.refresh()?;
+                            }
+                        }
+                        KeyCode::Char('x') => {
+                            // Kill selected session
+                            if let Some(SelectedItem::Session(project, session)) = app.get_selected_item() {
+                                let session_id = session.session.id;
+                                let tmux_session = session.session.tmux_session.clone();
+                                let worktree_path = session.session.worktree_path.clone();
+                                let project_path = project.project.path.clone();
+
+                                // Kill tmux if running
+                                if app.session_manager.is_alive(&tmux_session)? {
+                                    app.session_manager.kill(&tmux_session)?;
+                                }
+
+                                // Remove worktree
+                                let _ = worktree::remove(&project_path, &worktree_path);
+
+                                // Remove from database
+                                app.db.delete_session(session_id)?;
+                                app.refresh()?;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -222,16 +297,50 @@ fn draw_ui(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header
+            Constraint::Length(8), // Header with logo
             Constraint::Min(0),    // Main content
             Constraint::Length(3), // Footer
         ])
         .split(f.area());
 
-    // Header
+    // Header with mini logo
     let session_count: usize = app.projects.iter().map(|p| p.sessions.len()).sum();
-    let header = Paragraph::new(format!("  mycel                              {} sessions", session_count))
-        .style(Style::default().fg(Color::Cyan))
+    let running_count: usize = app.projects.iter()
+        .flat_map(|p| &p.sessions)
+        .filter(|s| s.is_running)
+        .count();
+
+    let header_lines = vec![
+        Line::from(vec![
+            Span::styled("      ", Style::default()),
+            Span::styled("░▒▓", Style::default().fg(Color::Rgb(0, 80, 100))),
+            Span::styled("█", Style::default().fg(Color::Rgb(0, 120, 120))),
+            Span::styled("●", Style::default().fg(Color::Rgb(50, 180, 140))),
+            Span::styled("█", Style::default().fg(Color::Rgb(0, 120, 120))),
+            Span::styled("▓▒░", Style::default().fg(Color::Rgb(0, 80, 100))),
+        ]),
+        Line::from(vec![
+            Span::styled("    ", Style::default()),
+            Span::styled("░▒", Style::default().fg(Color::Rgb(0, 60, 80))),
+            Span::styled("───", Style::default().fg(Color::Rgb(0, 100, 110))),
+            Span::styled("●", Style::default().fg(Color::Rgb(50, 180, 140))),
+            Span::styled("───", Style::default().fg(Color::Rgb(0, 100, 110))),
+            Span::styled("▒░", Style::default().fg(Color::Rgb(0, 60, 80))),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  M Y C E L", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{} sessions", session_count), Style::default().fg(Color::White)),
+            Span::styled("  ", Style::default()),
+            Span::styled(format!("{} running", running_count), Style::default().fg(Color::Green)),
+        ]),
+        Line::from(vec![
+            Span::styled("  the network beneath your code", Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+
+    let header = Paragraph::new(header_lines)
         .block(Block::default().borders(Borders::BOTTOM));
     f.render_widget(header, chunks[0]);
 
@@ -307,7 +416,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     }
 
     // Footer
-    let footer = Paragraph::new(" [a]ttach  [k]ill  [s]pawn  [r]efresh  [q]uit")
+    let footer = Paragraph::new(" [a]ttach  [s]pawn  [x] kill  [r]efresh  [q]uit")
         .style(Style::default().fg(Color::DarkGray))
         .block(Block::default().borders(Borders::TOP));
     f.render_widget(footer, chunks[2]);
