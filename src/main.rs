@@ -7,6 +7,7 @@ mod config;
 mod confirm;
 mod db;
 mod disk;
+mod notify;
 mod session;
 mod tui;
 mod worktree;
@@ -76,6 +77,12 @@ enum Commands {
     },
     /// List banked sessions
     Banked,
+    /// Send desktop notifications for session events
+    Notify {
+        /// Poll interval in seconds
+        #[arg(short, long, default_value_t = 5)]
+        interval: u64,
+    },
 }
 
 #[tokio::main]
@@ -101,5 +108,6 @@ async fn main() -> Result<()> {
             cli::unbank::run(&name, spawn, force).await
         }
         Some(Commands::Banked) => cli::banked::run().await,
+        Some(Commands::Notify { interval }) => cli::notify::run(interval).await,
     }
 }
