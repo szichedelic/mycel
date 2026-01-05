@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::env;
-use std::time::Duration;
 use std::process::Command;
+use std::time::Duration;
 
 use crate::config::{ProjectConfig, TemplateConfig};
 use crate::db::Database;

@@ -128,9 +128,11 @@ async fn main() -> Result<()> {
         None => tui::run().await,
         Some(Commands::Init) => cli::init::run().await,
         Some(Commands::Projects) => cli::projects::run().await,
-        Some(Commands::Spawn { name, note, template }) => {
-            cli::spawn::run(&name, note.as_deref(), template.as_deref()).await
-        }
+        Some(Commands::Spawn {
+            name,
+            note,
+            template,
+        }) => cli::spawn::run(&name, note.as_deref(), template.as_deref()).await,
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,
         Some(Commands::History) => cli::history::run().await,
@@ -145,9 +147,7 @@ async fn main() -> Result<()> {
             cli::unbank::run(&name, spawn, force).await
         }
         Some(Commands::Banked) => cli::banked::run().await,
-        Some(Commands::BankExport { name, output }) => {
-            cli::bank_export::run(&name, output).await
-        }
+        Some(Commands::BankExport { name, output }) => cli::bank_export::run(&name, output).await,
         Some(Commands::BankImport { path, name, force }) => {
             cli::bank_import::run(&path, name.as_deref(), force).await
         }

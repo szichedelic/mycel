@@ -32,8 +32,16 @@ pub async fn run() -> Result<()> {
             .map(|count| format!("{count} commits"))
             .unwrap_or_else(|| "commits n/a".to_string());
 
-        println!("  {}  {duration}  {commit_text}  ended {ended_age}", entry.name);
-        if let Some(note) = entry.note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        println!(
+            "  {}  {duration}  {commit_text}  ended {ended_age}",
+            entry.name
+        );
+        if let Some(note) = entry
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
             println!("    note: {note}");
         }
     }

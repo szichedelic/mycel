@@ -290,7 +290,10 @@ impl App {
             ViewItem::Banked { project_name, item } => {
                 Some(SelectedItem::Banked(project_name, item))
             }
-            ViewItem::Spacer | ViewItem::BankedHeader | ViewItem::HistoryHeader | ViewItem::History { .. } => None,
+            ViewItem::Spacer
+            | ViewItem::BankedHeader
+            | ViewItem::HistoryHeader
+            | ViewItem::History { .. } => None,
         }
     }
 
@@ -359,12 +362,8 @@ impl App {
             let mut matches = Vec::new();
             for entry in &self.history {
                 let matches_query = query.is_empty()
-                    || matcher
-                        .fuzzy_match(&entry.session.name, query)
-                        .is_some()
-                    || matcher
-                        .fuzzy_match(&entry.project.name, query)
-                        .is_some();
+                    || matcher.fuzzy_match(&entry.session.name, query).is_some()
+                    || matcher.fuzzy_match(&entry.project.name, query).is_some();
                 if matches_query {
                     matches.push(entry);
                 }
@@ -583,8 +582,7 @@ pub async fn run() -> Result<()> {
                                             name,
                                             template.and_then(|t| t.branch_prefix.as_deref()),
                                         );
-                                        let sanitized =
-                                            worktree::sanitize_branch_name(&full_name);
+                                        let sanitized = worktree::sanitize_branch_name(&full_name);
 
                                         let branch_exists = std::process::Command::new("git")
                                             .args([
@@ -636,8 +634,9 @@ pub async fn run() -> Result<()> {
                                             std::thread::sleep(std::time::Duration::from_millis(
                                                 600,
                                             ));
-                                            if let Err(err) =
-                                                app.session_manager.send_prompt(&tmux_session, prompt)
+                                            if let Err(err) = app
+                                                .session_manager
+                                                .send_prompt(&tmux_session, prompt)
                                             {
                                                 println!(
                                                     "Warning: failed to send template prompt: {err}"
@@ -1050,10 +1049,7 @@ pub async fn run() -> Result<()> {
                                             "{project_name}-{item_name}.mycel-bank.tar.gz"
                                         ));
 
-                                    print!(
-                                        "Export path (default: {}): ",
-                                        default_path.display()
-                                    );
+                                    print!("Export path (default: {}): ", default_path.display());
                                     io::stdout().flush()?;
                                     let mut output = String::new();
                                     io::stdin().read_line(&mut output)?;
@@ -1066,41 +1062,38 @@ pub async fn run() -> Result<()> {
 
                                     if let Some(parent) = output_path.parent() {
                                         if let Err(err) = std::fs::create_dir_all(parent) {
-                                            println!(
-                                                "Error creating export directory: {err}"
-                                            );
-                                            std::thread::sleep(
-                                                std::time::Duration::from_millis(1000),
-                                            );
+                                            println!("Error creating export directory: {err}");
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                1000,
+                                            ));
                                         } else {
-                                            let metadata =
-                                                match bank::read_metadata(&project_name, &item_name)
-                                                {
-                                                    Ok(Some(metadata)) => metadata,
-                                                    Ok(None) => bank::BankMetadata::new(
-                                                        project_name.clone(),
-                                                        item_name.clone(),
-                                                        None,
-                                                        None,
-                                                    ),
-                                                    Err(err) => {
-                                                        println!(
-                                                            "Error reading metadata: {err}"
-                                                        );
-                                                        std::thread::sleep(
-                                                            std::time::Duration::from_millis(1000),
-                                                        );
-                                                        enable_raw_mode()?;
-                                                        execute!(
-                                                            terminal.backend_mut(),
-                                                            EnterAlternateScreen,
-                                                            EnableMouseCapture
-                                                        )?;
-                                                        terminal.clear()?;
-                                                        app.refresh()?;
-                                                        continue;
-                                                    }
-                                                };
+                                            let metadata = match bank::read_metadata(
+                                                &project_name,
+                                                &item_name,
+                                            ) {
+                                                Ok(Some(metadata)) => metadata,
+                                                Ok(None) => bank::BankMetadata::new(
+                                                    project_name.clone(),
+                                                    item_name.clone(),
+                                                    None,
+                                                    None,
+                                                ),
+                                                Err(err) => {
+                                                    println!("Error reading metadata: {err}");
+                                                    std::thread::sleep(
+                                                        std::time::Duration::from_millis(1000),
+                                                    );
+                                                    enable_raw_mode()?;
+                                                    execute!(
+                                                        terminal.backend_mut(),
+                                                        EnterAlternateScreen,
+                                                        EnableMouseCapture
+                                                    )?;
+                                                    terminal.clear()?;
+                                                    app.refresh()?;
+                                                    continue;
+                                                }
+                                            };
 
                                             match bank::export_bundle(
                                                 &bundle_path,
@@ -1202,15 +1195,15 @@ pub async fn run() -> Result<()> {
                                                 imported.session_name,
                                                 imported.bundle_path.display()
                                             );
-                                            std::thread::sleep(
-                                                std::time::Duration::from_millis(800),
-                                            );
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                800,
+                                            ));
                                         }
                                         Err(err) => {
                                             println!("Error importing bank: {err}");
-                                            std::thread::sleep(
-                                                std::time::Duration::from_millis(1200),
-                                            );
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                1200,
+                                            ));
                                         }
                                     }
 
@@ -1274,8 +1267,7 @@ fn handle_mouse_event(
                 width: size.width,
                 height: size.height,
             };
-            let (_, list_area, _, _) =
-                split_layout(area, app.preview_enabled && !app.history_mode);
+            let (_, list_area, _, _) = split_layout(area, app.preview_enabled && !app.history_mode);
             if let Some(index) = list_index_at(app, list_area, mouse.row, mouse.column) {
                 app.selected = index;
                 app.update_preview(false);

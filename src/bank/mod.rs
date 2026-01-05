@@ -212,7 +212,11 @@ pub fn delete_metadata(project_name: &str, session_name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn export_bundle(bundle_path: &Path, metadata: &BankMetadata, output_path: &Path) -> Result<()> {
+pub fn export_bundle(
+    bundle_path: &Path,
+    metadata: &BankMetadata,
+    output_path: &Path,
+) -> Result<()> {
     let file = File::create(output_path).context("Failed to create export file")?;
     let encoder = GzEncoder::new(file, Compression::default());
     let mut builder = Builder::new(encoder);
@@ -282,10 +286,8 @@ pub fn import_bundle(
                 fs::create_dir_all(parent).context("Failed to create bank directory")?;
             }
 
-            let mut output =
-                File::create(&output_path).context("Failed to create bundle file")?;
-            std::io::copy(&mut entry, &mut output)
-                .context("Failed to write bundle file")?;
+            let mut output = File::create(&output_path).context("Failed to create bundle file")?;
+            std::io::copy(&mut entry, &mut output).context("Failed to write bundle file")?;
             bundle_output_path = Some(output_path);
         }
     }
