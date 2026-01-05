@@ -16,9 +16,7 @@ pub fn find_git_root(from: &Path) -> Result<PathBuf> {
         bail!("Not a git repository");
     }
 
-    let path = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_string();
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
     Ok(PathBuf::from(path))
 }
@@ -59,8 +57,7 @@ pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<(Pa
 
     // Ensure parent directory exists
     if let Some(parent) = worktree_path.parent() {
-        std::fs::create_dir_all(parent)
-            .context("Failed to create worktree directory")?;
+        std::fs::create_dir_all(parent).context("Failed to create worktree directory")?;
     }
 
     // Create the worktree
@@ -85,7 +82,11 @@ pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<(Pa
 }
 
 /// Create a worktree from an existing branch (for unbanking)
-pub fn create_from_existing(git_root: &Path, branch_name: &str, config: &ProjectConfig) -> Result<(PathBuf, String)> {
+pub fn create_from_existing(
+    git_root: &Path,
+    branch_name: &str,
+    config: &ProjectConfig,
+) -> Result<(PathBuf, String)> {
     // Resolve worktree directory
     let worktree_base = if config.worktree_dir.starts_with('/') {
         PathBuf::from(&config.worktree_dir)
@@ -101,8 +102,7 @@ pub fn create_from_existing(git_root: &Path, branch_name: &str, config: &Project
     let worktree_path = worktree_base.join(project_name).join(branch_name);
 
     if let Some(parent) = worktree_path.parent() {
-        std::fs::create_dir_all(parent)
-            .context("Failed to create worktree directory")?;
+        std::fs::create_dir_all(parent).context("Failed to create worktree directory")?;
     }
 
     // Create worktree from existing branch (no -b flag)
@@ -124,30 +124,16 @@ pub fn create_from_existing(git_root: &Path, branch_name: &str, config: &Project
     Ok((worktree_path, branch_name.to_string()))
 }
 
-/// Run setup commands in a worktree
-pub fn run_setup(worktree_path: &Path, commands: &[String]) -> Result<()> {
-    for cmd in commands {
-        println!("  Running: {}", cmd);
-
-        let status = Command::new("sh")
-            .args(["-c", cmd])
-            .current_dir(worktree_path)
-            .status()
-            .context(format!("Failed to run setup command: {}", cmd))?;
-
-        if !status.success() {
-            bail!("Setup command failed: {}", cmd);
-        }
-    }
-
-    Ok(())
-}
-
 /// Remove a git worktree
 pub fn remove(git_root: &Path, worktree_path: &Path) -> Result<()> {
     // Remove the worktree
     let status = Command::new("git")
-        .args(["worktree", "remove", "--force", &worktree_path.to_string_lossy()])
+        .args([
+            "worktree",
+            "remove",
+            "--force",
+            &worktree_path.to_string_lossy(),
+        ])
         .current_dir(git_root)
         .status()
         .context("Failed to remove git worktree")?;
@@ -171,45 +157,4 @@ pub fn remove(git_root: &Path, worktree_path: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// List existing worktrees for a repository
-pub fn list(git_root: &Path) -> Result<Vec<WorktreeInfo>> {
-    let output = Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(git_root)
-        .output()
-        .context("Failed to list git worktrees")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut worktrees = Vec::new();
-    let mut current_path: Option<PathBuf> = None;
-    let mut current_branch: Option<String> = None;
-
-    for line in stdout.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current_path = Some(PathBuf::from(path));
-        } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
-            current_branch = Some(branch.to_string());
-        } else if line.is_empty() {
-            if let (Some(path), Some(branch)) = (current_path.take(), current_branch.take()) {
-                worktrees.push(WorktreeInfo { path, branch });
-            }
-            current_path = None;
-            current_branch = None;
-        }
-    }
-
-    // Handle last entry if no trailing newline
-    if let (Some(path), Some(branch)) = (current_path, current_branch) {
-        worktrees.push(WorktreeInfo { path, branch });
-    }
-
-    Ok(worktrees)
-}
-
-#[derive(Debug)]
-pub struct WorktreeInfo {
-    pub path: PathBuf,
-    pub branch: String,
 }
