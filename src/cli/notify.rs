@@ -55,10 +55,8 @@ pub async fn run(interval_secs: u64) -> Result<()> {
 
                     if alive && waiting && !previous.waiting {
                         let title = "Mycel: input needed";
-                        let body = format!(
-                            "{} ({}) is waiting for input.",
-                            session.name, project.name
-                        );
+                        let body =
+                            format!("{} ({}) is waiting for input.", session.name, project.name);
                         let _ = notify::send_notification(title, &body);
                     }
 
@@ -71,8 +69,7 @@ pub async fn run(interval_secs: u64) -> Result<()> {
 
                     if !alive && previous.alive {
                         let title = "Mycel: session stopped";
-                        let body =
-                            format!("{} ({}) session ended.", session.name, project.name);
+                        let body = format!("{} ({}) session ended.", session.name, project.name);
                         let _ = notify::send_notification(title, &body);
                     }
                 }
@@ -126,7 +123,5 @@ fn is_waiting_prompt(output: &str) -> bool {
 
 fn contains_error(output: &str) -> bool {
     let lowered = output.to_lowercase();
-    ERROR_MARKERS
-        .iter()
-        .any(|marker| lowered.contains(marker))
+    ERROR_MARKERS.iter().any(|marker| lowered.contains(marker))
 }

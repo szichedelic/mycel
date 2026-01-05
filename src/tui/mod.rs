@@ -398,7 +398,9 @@ pub async fn run() -> Result<()> {
                                 )?;
 
                                 if !app.session_manager.is_alive(&tmux_session)? {
-                                    println!("Session '{session_name}' is not running. Restarting...");
+                                    println!(
+                                        "Session '{session_name}' is not running. Restarting..."
+                                    );
                                     let config = ProjectConfig::load(&project_path)?;
                                     app.session_manager.create(
                                         &project_name,
@@ -588,10 +590,7 @@ pub async fn run() -> Result<()> {
                                     } else {
                                         println!("Session '{session_name}' already stopped.");
                                     }
-                                    println!(
-                                        "Worktree preserved at: {}",
-                                        worktree_path.display()
-                                    );
+                                    println!("Worktree preserved at: {}", worktree_path.display());
                                     std::thread::sleep(std::time::Duration::from_millis(800));
                                 } else {
                                     println!("Cancelled.");
@@ -887,24 +886,20 @@ fn draw_ui(f: &mut Frame, app: &App) {
             let free_str = format_bytes(usage.available_bytes);
             let low_disk = is_low_disk(usage);
             let free_style = if low_disk {
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Green)
             };
 
-            disk_spans.push(Span::styled("  │  Free: ", Style::default().fg(Color::DarkGray)));
             disk_spans.push(Span::styled(
-                format!("{free_str} ({percent}%)"),
-                free_style,
+                "  │  Free: ",
+                Style::default().fg(Color::DarkGray),
             ));
+            disk_spans.push(Span::styled(format!("{free_str} ({percent}%)"), free_style));
             if low_disk {
                 disk_spans.push(Span::styled(
                     "  LOW",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ));
             }
         }
@@ -1124,7 +1119,11 @@ fn draw_ui(f: &mut Frame, app: &App) {
     if let Some(preview_area) = preview_area {
         let (preview_title, preview_body, preview_style) = match app.get_selected_item() {
             Some(SelectedItem::Session(_, session)) => {
-                let status = if session.is_running { "running" } else { "stopped" };
+                let status = if session.is_running {
+                    "running"
+                } else {
+                    "stopped"
+                };
                 let title = format!("Preview: {} ({status})", session.session.name);
                 let body = if !app.preview_text.trim().is_empty() {
                     app.preview_text.clone()
@@ -1259,15 +1258,16 @@ fn format_bytes(bytes: u64) -> String {
     } else if bytes < 1024_u64.pow(4) {
         format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     } else {
-        format!("{:.1} TB", bytes as f64 / (1024.0 * 1024.0 * 1024.0 * 1024.0))
+        format!(
+            "{:.1} TB",
+            bytes as f64 / (1024.0 * 1024.0 * 1024.0 * 1024.0)
+        )
     }
 }
 
 fn worktree_size_style(bytes: u64) -> Style {
     if bytes >= HUGE_WORKTREE_BYTES {
-        Style::default()
-            .fg(Color::Red)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
     } else if bytes >= LARGE_WORKTREE_BYTES {
         Style::default().fg(Color::Yellow)
     } else {
@@ -1279,10 +1279,7 @@ fn disk_free_percent(usage: disk::DiskUsage) -> Option<u64> {
     if usage.total_bytes == 0 {
         return None;
     }
-    Some(
-        (usage.available_bytes.saturating_mul(100) / usage.total_bytes)
-            .min(100),
-    )
+    Some((usage.available_bytes.saturating_mul(100) / usage.total_bytes).min(100))
 }
 
 fn is_low_disk(usage: disk::DiskUsage) -> bool {
