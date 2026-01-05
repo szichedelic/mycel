@@ -5,8 +5,75 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use std::time::{Duration, Instant};
 
-const LOGO: &str = r#"
+const LOGO_FRAMES: [&str; 5] = [
+    // Frame 0 - center only
+    r#"
+
+
+
+
+
+
+            ●
+
+
+
+
+
+
+"#,
+    // Frame 1 - small network
+    r#"
+
+
+
+
+           ╲│╱
+            ●
+           ╱│╲
+
+
+
+
+
+
+"#,
+    // Frame 2 - growing
+    r#"
+
+
+
+         ╲  │  ╱
+        ──╲─┼─╱──
+       ───●─●─●───
+        ──╱─┼─╲──
+         ╱  │  ╲
+
+
+
+
+
+"#,
+    // Frame 3 - larger
+    r#"
+
+              ░░░▒▒▒▓▓▒▒▒░░░
+           ░▒▓█▀           ▀█▓▒░
+         ░▓█▀  ╲  │  ╱        ▀█▓░
+        ▒█▀  ·──╲─┼─╱──·        ▀█▒
+       ▓█   ───●─────●───        █▓
+        ▒█▀  ·──╱─┼─╲──·        ▀█▒
+         ░▓█▄  ╱  │  ╲        ▄█▓░
+           ░▒▓█▄▄           ▄▄█▓▒░
+              ░░░▒▒▒▓▓▒▒▒░░░
+
+
+
+"#,
+    // Frame 4 - full
+    r#"
               ░░░▒▒▒▓▓███▓▓▒▒▒░░░
            ░▒▓█▀▀             ▀▀█▓▒░
          ░▓█▀   ·    ·    ·      ▀█▓░
@@ -20,7 +87,8 @@ const LOGO: &str = r#"
          ░▓█▄   ·    ·    ·      ▄█▓░
            ░▒▓█▄▄             ▄▄█▓▒░
               ░░░▒▒▒▓▓███▓▓▒▒▒░░░
-"#;
+"#,
+];
 
 const NAME: &str = r#"
    ███╗   ███╗██╗   ██╗ ██████╗███████╗██╗
@@ -31,38 +99,35 @@ const NAME: &str = r#"
    ╚═╝     ╚═╝   ╚═╝    ╚═════╝╚══════╝╚══════╝
 "#;
 
-const TAGLINE: &str = "the network beneath your code";
-
-pub fn draw(f: &mut Frame) {
+pub fn draw_animated(f: &mut Frame, frame_idx: usize) {
     let area = f.area();
 
-    // Center everything vertically
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(20),
+            Constraint::Percentage(15),
             Constraint::Min(20),
-            Constraint::Percentage(20),
+            Constraint::Percentage(15),
         ])
         .split(area);
 
     let content_area = chunks[1];
 
-    // Create gradient colors for the logo
     let gradient_colors = [
-        Color::Rgb(0, 50, 80),    // Deep blue
-        Color::Rgb(0, 80, 100),   // Teal
-        Color::Rgb(0, 120, 120),  // Cyan
-        Color::Rgb(0, 150, 130),  // Aqua
-        Color::Rgb(50, 180, 140), // Soft green
+        Color::Rgb(0, 50, 80),
+        Color::Rgb(0, 80, 100),
+        Color::Rgb(0, 120, 120),
+        Color::Rgb(0, 150, 130),
+        Color::Rgb(50, 180, 140),
     ];
 
-    // Render logo with gradient
-    let logo_lines: Vec<Line> = LOGO
+    let logo = LOGO_FRAMES[frame_idx.min(LOGO_FRAMES.len() - 1)];
+
+    let logo_lines: Vec<Line> = logo
         .lines()
         .enumerate()
         .map(|(i, line)| {
-            let color_idx = (i * gradient_colors.len()) / LOGO.lines().count().max(1);
+            let color_idx = (i * gradient_colors.len()) / logo.lines().count().max(1);
             let color = gradient_colors[color_idx.min(gradient_colors.len() - 1)];
             Line::from(Span::styled(line, Style::default().fg(color)))
         })
@@ -70,7 +135,7 @@ pub fn draw(f: &mut Frame) {
 
     let logo_height = logo_lines.len() as u16;
     let name_height = NAME.lines().count() as u16;
-    let total_height = logo_height + name_height + 3;
+    let total_height = logo_height + name_height + 2;
 
     let inner_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -78,28 +143,26 @@ pub fn draw(f: &mut Frame) {
             Constraint::Length(logo_height),
             Constraint::Length(1),
             Constraint::Length(name_height),
-            Constraint::Length(2),
-            Constraint::Length(1),
         ])
         .split(centered_rect(60, total_height, content_area));
 
     let logo_paragraph = Paragraph::new(logo_lines).alignment(Alignment::Center);
     f.render_widget(logo_paragraph, inner_chunks[0]);
 
-    // Render name with cyan color
-    let name_lines: Vec<Line> = NAME
-        .lines()
-        .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::Cyan))))
-        .collect();
+    // Only show name on last frames
+    if frame_idx >= 3 {
+        let name_lines: Vec<Line> = NAME
+            .lines()
+            .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::Cyan))))
+            .collect();
 
-    let name_paragraph = Paragraph::new(name_lines).alignment(Alignment::Center);
-    f.render_widget(name_paragraph, inner_chunks[2]);
+        let name_paragraph = Paragraph::new(name_lines).alignment(Alignment::Center);
+        f.render_widget(name_paragraph, inner_chunks[2]);
+    }
+}
 
-    // Render tagline
-    let tagline = Paragraph::new(TAGLINE)
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
-    f.render_widget(tagline, inner_chunks[4]);
+pub fn draw(f: &mut Frame) {
+    draw_animated(f, LOGO_FRAMES.len() - 1);
 }
 
 fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
