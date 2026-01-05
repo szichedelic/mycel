@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -9,6 +9,7 @@ use axum::{
     routing::get,
     Router,
 };
+use axum_server::tls_rustls::RustlsConfig;
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Deserialize;
@@ -54,7 +55,13 @@ struct PtySession {
     child: Box<dyn portable_pty::Child + Send>,
 }
 
-pub async fn run(host: &str, port: u16, token: Option<&str>) -> Result<()> {
+pub async fn run(
+    host: &str,
+    port: u16,
+    token: Option<&str>,
+    tls_cert: Option<&PathBuf>,
+    tls_key: Option<&PathBuf>,
+) -> Result<()> {
     let exe_path = env::current_exe().context("Failed to resolve current executable")?;
     let cwd = env::current_dir().context("Failed to resolve current directory")?;
     let state = AppState {
@@ -69,12 +76,28 @@ pub async fn run(host: &str, port: u16, token: Option<&str>) -> Result<()> {
         .with_state(state);
 
     let addr = resolve_bind_addr(host, port)?;
-    print_urls(host, port, token);
+    let tls_config = match (tls_cert, tls_key) {
+        (Some(cert), Some(key)) => Some(
+            RustlsConfig::from_pem_file(cert, key)
+                .await
+                .context("Failed to load TLS certificate/key")?,
+        ),
+        (None, None) => None,
+        _ => bail!("Both --tls-cert and --tls-key are required to enable TLS"),
+    };
+    print_urls(host, port, token, tls_config.is_some());
 
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .context("Failed to start web server")?;
+    if let Some(tls) = tls_config {
+        axum_server::bind_rustls(addr, tls)
+            .serve(app.into_make_service())
+            .await
+            .context("Failed to start HTTPS server")?;
+    } else {
+        axum::Server::bind(&addr)
+            .serve(app.into_make_service())
+            .await
+            .context("Failed to start web server")?;
+    }
 
     Ok(())
 }
@@ -89,11 +112,12 @@ fn resolve_bind_addr(host: &str, port: u16) -> Result<std::net::SocketAddr> {
     Ok(addr)
 }
 
-fn print_urls(host: &str, port: u16, token: Option<&str>) {
+fn print_urls(host: &str, port: u16, token: Option<&str>, tls_enabled: bool) {
+    let scheme = if tls_enabled { "https" } else { "http" };
     let suffix = token
         .map(|value| format!("?token={value}"))
         .unwrap_or_default();
-    println!("Web TUI: http://{host}:{port}/{suffix}");
+    println!("Web TUI: {scheme}://{host}:{port}/{suffix}");
     if host == "0.0.0.0" || host == "::" {
         println!("Tip: use your machine's LAN IP on your phone (example: 192.168.x.x).");
     }

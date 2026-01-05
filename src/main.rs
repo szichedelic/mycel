@@ -130,6 +130,12 @@ enum Commands {
         /// Optional access token to protect the web UI
         #[arg(long)]
         token: Option<String>,
+        /// TLS certificate (PEM) for HTTPS
+        #[arg(long)]
+        tls_cert: Option<PathBuf>,
+        /// TLS private key (PEM) for HTTPS
+        #[arg(long)]
+        tls_key: Option<PathBuf>,
     },
 }
 
@@ -176,8 +182,21 @@ async fn main() -> Result<()> {
             cli::bank_import::run(&path, name.as_deref(), force).await
         }
         Some(Commands::Notify { interval }) => cli::notify::run(interval).await,
-        Some(Commands::Web { host, port, token }) => {
-            cli::web::run(&host, port, token.as_deref()).await
+        Some(Commands::Web {
+            host,
+            port,
+            token,
+            tls_cert,
+            tls_key,
+        }) => {
+            cli::web::run(
+                &host,
+                port,
+                token.as_deref(),
+                tls_cert.as_ref(),
+                tls_key.as_ref(),
+            )
+            .await
         }
     }
 }
