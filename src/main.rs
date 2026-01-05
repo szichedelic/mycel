@@ -29,6 +29,9 @@ enum Commands {
     Spawn {
         /// Name for the worktree/session
         name: String,
+        /// Optional note for the session
+        #[arg(short, long)]
+        note: Option<String>,
     },
     /// Attach to an existing session
     Attach {
@@ -84,7 +87,7 @@ async fn main() -> Result<()> {
         None => tui::run().await,
         Some(Commands::Init) => cli::init::run().await,
         Some(Commands::Projects) => cli::projects::run().await,
-        Some(Commands::Spawn { name }) => cli::spawn::run(&name).await,
+        Some(Commands::Spawn { name, note }) => cli::spawn::run(&name, note.as_deref()).await,
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,
         Some(Commands::Kill {

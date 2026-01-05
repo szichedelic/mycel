@@ -348,6 +348,17 @@ pub async fn run() -> Result<()> {
                                 let name = name.trim();
 
                                 if !name.is_empty() {
+                                    print!("Session note (optional): ");
+                                    io::stdout().flush()?;
+                                    let mut note = String::new();
+                                    io::stdin().read_line(&mut note)?;
+                                    let note = note.trim();
+                                    let note = if note.is_empty() {
+                                        None
+                                    } else {
+                                        Some(note.to_string())
+                                    };
+
                                     let config = ProjectConfig::load(&project.path)?;
                                     let sanitized = worktree::sanitize_branch_name(name);
 
@@ -390,10 +401,55 @@ pub async fn run() -> Result<()> {
                                         &branch_name,
                                         &worktree_path,
                                         &tmux_session,
+                                        note.as_deref(),
                                     )?;
                                     println!("Session '{branch_name}' created.");
                                     std::thread::sleep(std::time::Duration::from_millis(500));
                                 }
+
+                                enable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    EnterAlternateScreen,
+                                    EnableMouseCapture
+                                )?;
+                                terminal.clear()?;
+                                app.refresh()?;
+                            }
+                        }
+                        KeyCode::Char('n') => {
+                            if let Some(SelectedItem::Session(_, session)) = app.get_selected_item()
+                            {
+                                let session_id = session.session.id;
+                                let session_name = session.session.name.clone();
+                                let current_note =
+                                    session.session.note.clone().unwrap_or_default();
+
+                                disable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    LeaveAlternateScreen,
+                                    DisableMouseCapture
+                                )?;
+
+                                println!("Edit note for '{session_name}' (blank to clear):");
+                                if !current_note.is_empty() {
+                                    println!("Current: {current_note}");
+                                }
+                                print!("New note: ");
+                                io::stdout().flush()?;
+                                let mut note = String::new();
+                                io::stdin().read_line(&mut note)?;
+                                let note = note.trim();
+                                let note = if note.is_empty() {
+                                    None
+                                } else {
+                                    Some(note.to_string())
+                                };
+
+                                app.db.update_session_note(session_id, note.as_deref())?;
+                                println!("Note updated.");
+                                std::thread::sleep(std::time::Duration::from_millis(500));
 
                                 enable_raw_mode()?;
                                 execute!(
@@ -612,6 +668,7 @@ pub async fn run() -> Result<()> {
                                                 &branch_name,
                                                 &worktree_path,
                                                 &tmux_session,
+                                                None,
                                             )?;
 
                                             println!("Session '{item_name}' restored.");
@@ -770,7 +827,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
                     Style::default().fg(Color::White)
                 };
 
-                let line = Line::from(vec![
+                let mut spans = vec![
                     Span::styled(format!("{prefix} "), Style::default().fg(Color::DarkGray)),
                     Span::styled(&session.session.name, session_style),
                     Span::raw("  "),
@@ -784,7 +841,20 @@ fn draw_ui(f: &mut Frame, app: &App) {
                         Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled(format!("  {age}"), Style::default().fg(Color::DarkGray)),
-                ]);
+                ];
+
+                if let Some(note) = &session.session.note {
+                    let note = note.trim();
+                    if !note.is_empty() {
+                        let note = format_note_excerpt(note, 40);
+                        spans.push(Span::styled(
+                            format!("  - {note}"),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
+
+                let line = Line::from(spans);
 
                 items.push(ListItem::new(line));
             }
@@ -843,7 +913,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
         f.render_widget(list, chunks[1]);
     }
 
-    let mut footer_text = " [a]ttach  [s]pawn  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit".to_string();
+    let mut footer_text = " [a]ttach  [s]pawn  [n]ote  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit".to_string();
     if app.search_mode || !app.search_query.is_empty() {
         footer_text.push_str("  [esc] clear");
         if app.search_mode {
@@ -882,4 +952,19 @@ fn format_relative_age(created_at_unix: i64, now_unix: i64) -> String {
     } else {
         format!("{}w ago", age_secs / 604_800)
     }
+}
+
+fn format_note_excerpt(note: &str, max_len: usize) -> String {
+    if max_len <= 3 {
+        return note.chars().take(max_len).collect();
+    }
+
+    let mut chars = note.chars();
+    let mut excerpt: String = chars.by_ref().take(max_len).collect();
+    if chars.next().is_some() {
+        excerpt = excerpt.chars().take(max_len - 3).collect();
+        excerpt.push_str("...");
+    }
+
+    excerpt
 }
