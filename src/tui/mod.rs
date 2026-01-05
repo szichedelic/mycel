@@ -120,9 +120,9 @@ impl App {
         let item = items.get(self.selected)?;
         match item {
             ViewItem::Project(project) => Some(SelectedItem::Project(project)),
-            ViewItem::Session { project, session, .. } => {
-                Some(SelectedItem::Session(project, session))
-            }
+            ViewItem::Session {
+                project, session, ..
+            } => Some(SelectedItem::Session(project, session)),
             ViewItem::Banked { project_name, item } => {
                 Some(SelectedItem::Banked(project_name, item))
             }
@@ -144,13 +144,19 @@ impl App {
     }
 
     fn toggle_expand(&mut self) {
-        let items = self.view_items();
-        let item = items.get(self.selected);
-        if let Some(ViewItem::Project(selected)) = item {
+        let selected_id = {
+            let items = self.view_items();
+            match items.get(self.selected) {
+                Some(ViewItem::Project(selected)) => Some(selected.project.id),
+                _ => None,
+            }
+        };
+
+        if let Some(selected_id) = selected_id {
             if let Some(project) = self
                 .projects
                 .iter_mut()
-                .find(|p| p.project.id == selected.project.id)
+                .find(|p| p.project.id == selected_id)
             {
                 project.expanded = !project.expanded;
             }
@@ -182,10 +188,8 @@ impl App {
         for project in &self.projects {
             let mut matching_sessions = Vec::new();
             for session in &project.sessions {
-                let matches = query.is_empty()
-                    || matcher
-                        .fuzzy_match(&session.session.name, query)
-                        .is_some();
+                let matches =
+                    query.is_empty() || matcher.fuzzy_match(&session.session.name, query).is_some();
                 if matches {
                     matching_sessions.push(session);
                 }
@@ -209,8 +213,7 @@ impl App {
 
         let mut banked_matches = Vec::new();
         for (project_name, item) in &self.banked {
-            let matches =
-                query.is_empty() || matcher.fuzzy_match(&item.name, query).is_some();
+            let matches = query.is_empty() || matcher.fuzzy_match(&item.name, query).is_some();
             if matches {
                 banked_matches.push((project_name.as_str(), item));
             }
@@ -220,10 +223,7 @@ impl App {
             items.push(ViewItem::Spacer);
             items.push(ViewItem::BankedHeader);
             for (project_name, item) in banked_matches {
-                items.push(ViewItem::Banked {
-                    project_name,
-                    item,
-                });
+                items.push(ViewItem::Banked { project_name, item });
             }
         }
 
@@ -422,8 +422,7 @@ pub async fn run() -> Result<()> {
                             {
                                 let session_id = session.session.id;
                                 let session_name = session.session.name.clone();
-                                let current_note =
-                                    session.session.note.clone().unwrap_or_default();
+                                let current_note = session.session.note.clone().unwrap_or_default();
 
                                 disable_raw_mode()?;
                                 execute!(
@@ -913,7 +912,9 @@ fn draw_ui(f: &mut Frame, app: &App) {
         f.render_widget(list, chunks[1]);
     }
 
-    let mut footer_text = " [a]ttach  [s]pawn  [n]ote  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit".to_string();
+    let mut footer_text =
+        " [a]ttach  [s]pawn  [n]ote  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit"
+            .to_string();
     if app.search_mode || !app.search_query.is_empty() {
         footer_text.push_str("  [esc] clear");
         if app.search_mode {
