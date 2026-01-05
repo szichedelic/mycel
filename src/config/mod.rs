@@ -32,6 +32,7 @@ impl Default for GlobalConfig {
 }
 
 impl GlobalConfig {
+    #[allow(dead_code)]
     pub fn load() -> Result<Self> {
         let config_path = dirs::home_dir()
             .context("Could not find home directory")?
@@ -41,8 +42,7 @@ impl GlobalConfig {
             return Ok(Self::default());
         }
 
-        let content = fs::read_to_string(&config_path)
-            .context("Failed to read global config")?;
+        let content = fs::read_to_string(&config_path).context("Failed to read global config")?;
 
         toml::from_str(&content).context("Failed to parse global config")
     }
@@ -87,8 +87,7 @@ impl ProjectConfig {
             return Ok(Self::default());
         }
 
-        let content = fs::read_to_string(&config_path)
-            .context("Failed to read project config")?;
+        let content = fs::read_to_string(&config_path).context("Failed to read project config")?;
 
         toml::from_str(&content).context("Failed to parse project config")
     }
