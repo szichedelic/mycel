@@ -22,7 +22,9 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::bank::{self, BankedItem};
-use crate::config::{ProjectConfig, TemplateConfig};
+use crate::config::{
+    available_backend_names, resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig,
+};
 use crate::confirm;
 use crate::db::{Database, Project, Session, SessionHistory};
 use crate::disk;
@@ -190,7 +192,7 @@ impl App {
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ) -> Result<()> {
-        let (project_name, project_path, session_name, tmux_session, worktree_path) =
+        let (project_name, project_path, session_name, tmux_session, worktree_path, backend_name) =
             match self.get_selected_item() {
                 Some(SelectedItem::Session(project, session)) => (
                     project.project.name.clone(),
@@ -198,6 +200,7 @@ impl App {
                     session.session.name.clone(),
                     session.session.tmux_session.clone(),
                     session.session.worktree_path.clone(),
+                    session.session.backend.clone(),
                 ),
                 _ => return Ok(()),
             };
@@ -213,11 +216,14 @@ impl App {
         if !self.session_manager.is_alive(&tmux_session)? {
             println!("Session '{session_name}' is not running. Restarting...");
             let config = ProjectConfig::load(&project_path)?;
+            let global_config = GlobalConfig::load()?;
+            let backend = resolve_backend(&global_config, &config, Some(&backend_name))?;
             self.session_manager.create(
                 &project_name,
                 &session_name,
                 &worktree_path,
                 &config.setup,
+                &backend,
             )?;
         }
 
@@ -555,7 +561,10 @@ pub async fn run() -> Result<()> {
                                     )?;
 
                                     let config = ProjectConfig::load(&project.path)?;
+                                    let global_config = GlobalConfig::load()?;
                                     let template_name = prompt_template_selection(&config)?;
+                                    let backend_override =
+                                        prompt_backend_selection(&global_config, &config)?;
 
                                     print!("Session name: ");
                                     io::stdout().flush()?;
@@ -608,7 +617,12 @@ pub async fn run() -> Result<()> {
                                             worktree::create(&project.path, &full_name, &config)?
                                         };
 
-                                        println!("Starting Claude session...");
+                                        let backend = resolve_backend(
+                                            &global_config,
+                                            &config,
+                                            backend_override.as_deref(),
+                                        )?;
+                                        println!("Starting {} session...", backend.name);
                                         let setup = merge_setup(&config, template);
                                         if !setup.is_empty() {
                                             println!("Setup: {}", setup.join(" && "));
@@ -618,12 +632,14 @@ pub async fn run() -> Result<()> {
                                             &branch_name,
                                             &worktree_path,
                                             &setup,
+                                            &backend,
                                         )?;
                                         app.db.add_session(
                                             project.id,
                                             &branch_name,
                                             &worktree_path,
                                             &tmux_session,
+                                            &backend.name,
                                             note.as_deref(),
                                         )?;
                                         if let Some(prompt) = template
@@ -989,24 +1005,32 @@ pub async fn run() -> Result<()> {
                                                 bank::delete_metadata(&project_name, &item_name)?;
 
                                                 let config = ProjectConfig::load(&git_root)?;
+                                                let global_config = GlobalConfig::load()?;
                                                 println!("Creating worktree...");
                                                 let (worktree_path, branch_name) =
                                                     worktree::create_from_existing(
                                                         &git_root, &item_name, &config,
                                                     )?;
 
-                                                println!("Starting Claude session...");
+                                                let backend = resolve_backend(
+                                                    &global_config,
+                                                    &config,
+                                                    None,
+                                                )?;
+                                                println!("Starting {} session...", backend.name);
                                                 let tmux_session = app.session_manager.create(
                                                     &project_name,
                                                     &branch_name,
                                                     &worktree_path,
                                                     &config.setup,
+                                                    &backend,
                                                 )?;
                                                 app.db.add_session(
                                                     project_id,
                                                     &branch_name,
                                                     &worktree_path,
                                                     &tmux_session,
+                                                    &backend.name,
                                                     None,
                                                 )?;
 
@@ -1492,6 +1516,10 @@ fn draw_ui(f: &mut Frame, app: &App) {
                     ),
                     Span::styled(format!("  {age}"), Style::default().fg(Color::DarkGray)),
                 ];
+                spans.push(Span::styled(
+                    format!("  [{}]", session.session.backend),
+                    Style::default().fg(Color::Blue),
+                ));
 
                 let size_span = match session.worktree_bytes {
                     Some(size) => Span::styled(
@@ -1846,6 +1874,55 @@ fn format_note_excerpt(note: &str, max_len: usize) -> String {
     }
 
     excerpt
+}
+
+fn prompt_backend_selection(
+    global: &GlobalConfig,
+    config: &ProjectConfig,
+) -> Result<Option<String>> {
+    let backends = available_backend_names(global, config);
+    if backends.is_empty() {
+        return Ok(None);
+    }
+
+    let default_backend = config
+        .backend
+        .as_deref()
+        .or(global.backend.as_deref())
+        .unwrap_or("claude");
+
+    println!("Backends:");
+    for (idx, name) in backends.iter().enumerate() {
+        let suffix = if name == default_backend {
+            " (default)"
+        } else {
+            ""
+        };
+        println!("  {}. {}{}", idx + 1, name, suffix);
+    }
+
+    print!("Backend (enter for default: {default_backend}): ");
+    io::stdout().flush()?;
+    let mut selection = String::new();
+    io::stdin().read_line(&mut selection)?;
+    let selection = selection.trim();
+
+    if selection.is_empty() {
+        return Ok(None);
+    }
+
+    if let Ok(index) = selection.parse::<usize>() {
+        if index >= 1 && index <= backends.len() {
+            return Ok(Some(backends[index - 1].clone()));
+        }
+    }
+
+    if backends.iter().any(|name| name == selection) {
+        return Ok(Some(selection.to_string()));
+    }
+
+    println!("Unknown backend '{selection}', using default.");
+    Ok(None)
 }
 
 fn prompt_template_selection(config: &ProjectConfig) -> Result<Option<String>> {

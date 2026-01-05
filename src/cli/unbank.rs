@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use std::env;
 
 use crate::bank;
-use crate::config::ProjectConfig;
+use crate::config::{resolve_backend, GlobalConfig, ProjectConfig};
 use crate::confirm;
 use crate::db::Database;
 use crate::session::SessionManager;
@@ -45,21 +45,29 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
 
     if spawn {
         let config = ProjectConfig::load(&git_root)?;
+        let global_config = GlobalConfig::load()?;
+        let backend = resolve_backend(&global_config, &config, None)?;
 
         println!("Creating worktree...");
         let (worktree_path, branch_name) =
             worktree::create_from_existing(&git_root, name, &config)?;
 
-        println!("Starting Claude session...");
+        println!("Starting {} session...", backend.name);
         let session_manager = SessionManager::new();
-        let tmux_session =
-            session_manager.create(&project.name, &branch_name, &worktree_path, &config.setup)?;
+        let tmux_session = session_manager.create(
+            &project.name,
+            &branch_name,
+            &worktree_path,
+            &config.setup,
+            &backend,
+        )?;
 
         db.add_session(
             project.id,
             &branch_name,
             &worktree_path,
             &tmux_session,
+            &backend.name,
             None,
         )?;
 

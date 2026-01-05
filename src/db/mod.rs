@@ -19,6 +19,7 @@ pub struct Session {
     pub name: String,
     pub worktree_path: PathBuf,
     pub tmux_session: String,
+    pub backend: String,
     pub note: Option<String>,
     pub created_at_unix: i64,
 }
@@ -67,6 +68,7 @@ impl Database {
                 name TEXT NOT NULL,
                 worktree_path TEXT NOT NULL,
                 tmux_session TEXT NOT NULL,
+                backend TEXT NOT NULL DEFAULT 'claude',
                 note TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id),
@@ -89,6 +91,7 @@ impl Database {
 
         self.ensure_sessions_created_at()?;
         self.ensure_sessions_note()?;
+        self.ensure_sessions_backend()?;
         Ok(())
     }
 
@@ -123,6 +126,27 @@ impl Database {
         if count == 0 {
             self.conn
                 .execute("ALTER TABLE sessions ADD COLUMN note TEXT", [])?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_sessions_backend(&self) -> Result<()> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'backend'",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if count == 0 {
+            self.conn.execute(
+                "ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'claude'",
+                [],
+            )?;
+            self.conn.execute(
+                "UPDATE sessions SET backend = 'claude' WHERE backend IS NULL OR backend = ''",
+                [],
+            )?;
         }
 
         Ok(())
@@ -179,15 +203,17 @@ impl Database {
         name: &str,
         worktree_path: &Path,
         tmux_session: &str,
+        backend: &str,
         note: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO sessions (project_id, name, worktree_path, tmux_session, note) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO sessions (project_id, name, worktree_path, tmux_session, backend, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 project_id,
                 name,
                 worktree_path.to_string_lossy(),
                 tmux_session,
+                backend,
                 note
             ],
         )?;
@@ -197,7 +223,7 @@ impl Database {
 
     pub fn get_session_by_name(&self, project_id: i64, name: &str) -> Result<Option<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, worktree_path, tmux_session, note, CAST(strftime('%s', created_at) AS INTEGER)
+            "SELECT id, name, worktree_path, tmux_session, backend, note, CAST(strftime('%s', created_at) AS INTEGER)
              FROM sessions WHERE project_id = ?1 AND name = ?2",
         )?;
 
@@ -207,8 +233,9 @@ impl Database {
                 name: row.get(1)?,
                 worktree_path: PathBuf::from(row.get::<_, String>(2)?),
                 tmux_session: row.get(3)?,
-                note: row.get(4)?,
-                created_at_unix: row.get(5)?,
+                backend: row.get(4)?,
+                note: row.get(5)?,
+                created_at_unix: row.get(6)?,
             })
         });
 
@@ -221,7 +248,7 @@ impl Database {
 
     pub fn list_sessions(&self, project_id: i64) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, worktree_path, tmux_session, note, CAST(strftime('%s', created_at) AS INTEGER)
+            "SELECT id, name, worktree_path, tmux_session, backend, note, CAST(strftime('%s', created_at) AS INTEGER)
              FROM sessions WHERE project_id = ?1",
         )?;
 
@@ -232,8 +259,9 @@ impl Database {
                     name: row.get(1)?,
                     worktree_path: PathBuf::from(row.get::<_, String>(2)?),
                     tmux_session: row.get(3)?,
-                    note: row.get(4)?,
-                    created_at_unix: row.get(5)?,
+                    backend: row.get(4)?,
+                    note: row.get(5)?,
+                    created_at_unix: row.get(6)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

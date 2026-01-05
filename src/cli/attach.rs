@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::env;
 
-use crate::config::ProjectConfig;
+use crate::config::{resolve_backend, GlobalConfig, ProjectConfig};
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::worktree;
@@ -25,7 +25,15 @@ pub async fn run(name: &str) -> Result<()> {
     if !session_manager.is_alive(&session.tmux_session)? {
         println!("Session '{name}' is not running. Restarting...");
         let config = ProjectConfig::load(&git_root)?;
-        session_manager.create(&project.name, name, &session.worktree_path, &config.setup)?;
+        let global_config = GlobalConfig::load()?;
+        let backend = resolve_backend(&global_config, &config, Some(&session.backend))?;
+        session_manager.create(
+            &project.name,
+            name,
+            &session.worktree_path,
+            &config.setup,
+            &backend,
+        )?;
     }
 
     session_manager.attach(&session.tmux_session)?;
