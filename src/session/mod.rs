@@ -2,6 +2,25 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
 
+const STARTUP_LOGO: &str = "
+\x1b[38;2;0;50;80m              ░░░▒▒▒▓▓███▓▓▒▒▒░░░\x1b[0m
+\x1b[38;2;0;80;100m           ░▒▓█▀▀             ▀▀█▓▒░\x1b[0m
+\x1b[38;2;0;100;110m         ░▓█▀   ·    ·    ·      ▀█▓░\x1b[0m
+\x1b[38;2;0;120;120m        ▒█▀  ·    ╲  │  ╱    ·     ▀█▒\x1b[0m
+\x1b[38;2;0;140;130m       ▓█   ·   ·──╲─┼─╱──·   ·     █▓\x1b[0m
+\x1b[38;2;30;160;135m      ▓█      ╲     ╲│╱     ╱        █▓\x1b[0m
+\x1b[38;2;50;180;140m      █▓  · ───●─────●─────●─── ·    ▓█\x1b[0m
+\x1b[38;2;30;160;135m      ▓█      ╱     ╱│╲     ╲        █▓\x1b[0m
+\x1b[38;2;0;140;130m       ▓█   ·   ·──╱─┼─╲──·   ·     █▓\x1b[0m
+\x1b[38;2;0;120;120m        ▒█▀  ·    ╱  │  ╲    ·     ▀█▒\x1b[0m
+\x1b[38;2;0;100;110m         ░▓█▄   ·    ·    ·      ▄█▓░\x1b[0m
+\x1b[38;2;0;80;100m           ░▒▓█▄▄             ▄▄█▓▒░\x1b[0m
+\x1b[38;2;0;50;80m              ░░░▒▒▒▓▓███▓▓▒▒▒░░░\x1b[0m
+
+\x1b[38;2;0;180;180m                  M Y C E L\x1b[0m
+\x1b[38;2;100;100;100m          the network beneath your code\x1b[0m
+";
+
 pub struct SessionManager;
 
 impl SessionManager {
@@ -10,7 +29,7 @@ impl SessionManager {
     }
 
     /// Create a new tmux session with Claude Code running in the given worktree
-    pub fn create(&self, project_name: &str, session_name: &str, worktree_path: &Path) -> Result<String> {
+    pub fn create(&self, project_name: &str, session_name: &str, worktree_path: &Path, setup_commands: &[String]) -> Result<String> {
         let tmux_session_name = format!("mycel-{}-{}", project_name, session_name);
 
         // Create tmux session in detached mode, starting in the worktree directory
@@ -30,13 +49,20 @@ impl SessionManager {
             anyhow::bail!("tmux new-session failed");
         }
 
-        // Start Claude Code in the session
+        // Build command: setup commands -> logo -> claude
+        let logo_escaped = STARTUP_LOGO.replace("'", "'\\''");
+        let setup_str = if setup_commands.is_empty() {
+            String::new()
+        } else {
+            setup_commands.join(" && ") + " && "
+        };
+        let logo_cmd = format!("{}clear && printf '{}' && sleep 1.5 && clear && claude", setup_str, logo_escaped);
         let status = Command::new("tmux")
             .args([
                 "send-keys",
                 "-t",
                 &tmux_session_name,
-                "claude",
+                &logo_cmd,
                 "Enter",
             ])
             .status()
