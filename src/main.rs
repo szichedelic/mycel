@@ -28,7 +28,7 @@ enum Commands {
     Init,
     /// List all registered projects
     Projects,
-    /// Create a new worktree with a Claude session
+    /// Create a new worktree with an AI session
     Spawn {
         /// Name for the worktree/session
         name: String,
@@ -38,6 +38,9 @@ enum Commands {
         /// Optional session template name
         #[arg(short, long)]
         template: Option<String>,
+        /// Optional backend override (e.g. claude, codex)
+        #[arg(short, long)]
+        backend: Option<String>,
     },
     /// Attach to an existing session
     Attach {
@@ -132,7 +135,10 @@ async fn main() -> Result<()> {
             name,
             note,
             template,
-        }) => cli::spawn::run(&name, note.as_deref(), template.as_deref()).await,
+            backend,
+        }) => {
+            cli::spawn::run(&name, note.as_deref(), template.as_deref(), backend.as_deref()).await
+        }
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,
         Some(Commands::History) => cli::history::run().await,

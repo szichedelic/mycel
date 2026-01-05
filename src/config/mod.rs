@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -12,6 +12,10 @@ pub struct GlobalConfig {
     pub editor: Option<String>,
     #[serde(default = "default_refresh_rate")]
     pub refresh_rate: u64,
+    #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
+    pub backends: BTreeMap<String, BackendConfig>,
 }
 
 fn default_terminal() -> String {
@@ -28,24 +32,31 @@ impl Default for GlobalConfig {
             terminal: default_terminal(),
             editor: None,
             refresh_rate: default_refresh_rate(),
+            backend: None,
+            backends: BTreeMap::new(),
         }
     }
 }
 
 impl GlobalConfig {
-    #[allow(dead_code)]
     pub fn load() -> Result<Self> {
-        let config_path = dirs::home_dir()
-            .context("Could not find home directory")?
-            .join(".mycelrc");
+        let home_dir = dirs::home_dir().context("Could not find home directory")?;
+        let config_paths = [
+            home_dir.join(".mycel").join("config.toml"),
+            home_dir.join(".mycelrc"),
+        ];
 
-        if !config_path.exists() {
-            return Ok(Self::default());
+        for config_path in &config_paths {
+            if !config_path.exists() {
+                continue;
+            }
+
+            let content =
+                fs::read_to_string(config_path).context("Failed to read global config")?;
+            return toml::from_str(&content).context("Failed to parse global config");
         }
 
-        let content = fs::read_to_string(&config_path).context("Failed to read global config")?;
-
-        toml::from_str(&content).context("Failed to parse global config")
+        Ok(Self::default())
     }
 }
 
@@ -59,6 +70,10 @@ pub struct ProjectConfig {
     pub worktree_dir: String,
     #[serde(default)]
     pub max_sessions: Option<u32>,
+    #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
+    pub backends: BTreeMap<String, BackendConfig>,
     #[serde(default)]
     pub templates: BTreeMap<String, TemplateConfig>,
 }
@@ -78,6 +93,8 @@ impl Default for ProjectConfig {
             setup: Vec::new(),
             worktree_dir: default_worktree_dir(),
             max_sessions: None,
+            backend: None,
+            backends: BTreeMap::new(),
             templates: BTreeMap::new(),
         }
     }
@@ -105,4 +122,107 @@ pub struct TemplateConfig {
     pub setup: Vec<String>,
     #[serde(default)]
     pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendConfig {
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedBackend {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+pub fn resolve_backend(
+    global: &GlobalConfig,
+    project: &ProjectConfig,
+    override_backend: Option<&str>,
+) -> Result<ResolvedBackend> {
+    let selected = override_backend
+        .filter(|name| !name.trim().is_empty())
+        .or(project.backend.as_deref())
+        .or(global.backend.as_deref())
+        .unwrap_or("claude");
+
+    let mut resolved = if let Some(default) = default_backend(selected) {
+        default
+    } else if project.backends.contains_key(selected) || global.backends.contains_key(selected) {
+        ResolvedBackend {
+            name: selected.to_string(),
+            command: selected.to_string(),
+            args: Vec::new(),
+        }
+    } else {
+        let available = available_backend_names(global, project);
+        let list = if available.is_empty() {
+            "none configured".to_string()
+        } else {
+            available.join(", ")
+        };
+        bail!("Unknown backend '{selected}'. Available backends: {list}");
+    };
+
+    if let Some(config) = global.backends.get(selected) {
+        apply_backend_override(&mut resolved, config);
+    }
+    if let Some(config) = project.backends.get(selected) {
+        apply_backend_override(&mut resolved, config);
+    }
+
+    Ok(resolved)
+}
+
+pub fn available_backend_names(global: &GlobalConfig, project: &ProjectConfig) -> Vec<String> {
+    let mut names: BTreeSet<String> = default_backend_configs()
+        .keys()
+        .cloned()
+        .collect();
+    names.extend(global.backends.keys().cloned());
+    names.extend(project.backends.keys().cloned());
+    names.into_iter().collect()
+}
+
+fn apply_backend_override(backend: &mut ResolvedBackend, config: &BackendConfig) {
+    if let Some(command) = config.command.as_deref().filter(|cmd| !cmd.trim().is_empty()) {
+        backend.command = command.to_string();
+    }
+    if let Some(args) = config.args.as_ref() {
+        backend.args = args.clone();
+    }
+}
+
+fn default_backend(name: &str) -> Option<ResolvedBackend> {
+    default_backend_configs().get(name).map(|config| ResolvedBackend {
+        name: name.to_string(),
+        command: config
+            .command
+            .clone()
+            .unwrap_or_else(|| name.to_string()),
+        args: config.args.clone().unwrap_or_default(),
+    })
+}
+
+fn default_backend_configs() -> BTreeMap<String, BackendConfig> {
+    let mut configs = BTreeMap::new();
+    configs.insert(
+        "claude".to_string(),
+        BackendConfig {
+            command: Some("claude".to_string()),
+            args: Some(Vec::new()),
+        },
+    );
+    configs.insert(
+        "codex".to_string(),
+        BackendConfig {
+            command: Some("codex".to_string()),
+            args: Some(Vec::new()),
+        },
+    );
+    configs
 }

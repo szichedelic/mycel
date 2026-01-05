@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
 
+use crate::config::ResolvedBackend;
+
 const STARTUP_LOGO: &str = "
 \x1b[38;2;0;50;80m              ░░░▒▒▒▓▓███▓▓▒▒▒░░░\x1b[0m
 \x1b[38;2;0;80;100m           ░▒▓█▀▀             ▀▀█▓▒░\x1b[0m
@@ -28,13 +30,14 @@ impl SessionManager {
         Self
     }
 
-    /// Create a new tmux session with Claude Code running in the given worktree
+    /// Create a new tmux session with the selected backend running in the given worktree
     pub fn create(
         &self,
         project_name: &str,
         session_name: &str,
         worktree_path: &Path,
         setup_commands: &[String],
+        backend: &ResolvedBackend,
     ) -> Result<String> {
         let tmux_session_name = format!("mycel-{project_name}-{session_name}");
 
@@ -55,22 +58,24 @@ impl SessionManager {
             anyhow::bail!("tmux new-session failed");
         }
 
-        // Build command: setup commands -> logo -> claude
+        // Build command: setup commands -> logo -> backend
         let logo_escaped = STARTUP_LOGO.replace("'", "'\\''");
         let setup_str = if setup_commands.is_empty() {
             String::new()
         } else {
             setup_commands.join(" && ") + " && "
         };
-        let logo_cmd =
-            format!("{setup_str}clear && printf '{logo_escaped}' && sleep 1.5 && clear && claude");
+        let backend_cmd = build_backend_command(backend);
+        let logo_cmd = format!(
+            "{setup_str}clear && printf '{logo_escaped}' && sleep 1.5 && clear && {backend_cmd}"
+        );
         let status = Command::new("tmux")
             .args(["send-keys", "-t", &tmux_session_name, &logo_cmd, "Enter"])
             .status()
-            .context("Failed to start Claude in tmux session")?;
+            .context("Failed to start backend in tmux session")?;
 
         if !status.success() {
-            anyhow::bail!("Failed to start Claude Code in session");
+            anyhow::bail!("Failed to start backend session");
         }
 
         Ok(tmux_session_name)
@@ -136,4 +141,18 @@ impl SessionManager {
 
         Ok(())
     }
+}
+
+fn build_backend_command(backend: &ResolvedBackend) -> String {
+    let mut parts = Vec::with_capacity(backend.args.len() + 1);
+    parts.push(shell_escape(&backend.command));
+    for arg in &backend.args {
+        parts.push(shell_escape(arg));
+    }
+    parts.join(" ")
+}
+
+fn shell_escape(value: &str) -> String {
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
 }

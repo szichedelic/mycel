@@ -3,7 +3,7 @@ use std::env;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::config::{ProjectConfig, TemplateConfig};
+use crate::config::{resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig};
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::worktree;
@@ -22,7 +22,12 @@ fn branch_exists(git_root: &std::path::Path, branch_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub async fn run(name: &str, note: Option<&str>, template_name: Option<&str>) -> Result<()> {
+pub async fn run(
+    name: &str,
+    note: Option<&str>,
+    template_name: Option<&str>,
+    backend_override: Option<&str>,
+) -> Result<()> {
     let current_dir = env::current_dir().context("Failed to get current directory")?;
     let git_root = worktree::find_git_root(&current_dir)?;
 
@@ -33,6 +38,8 @@ pub async fn run(name: &str, note: Option<&str>, template_name: Option<&str>) ->
         .context("Project not registered. Run 'mycel init' first.")?;
 
     let config = ProjectConfig::load(&git_root)?;
+    let global_config = GlobalConfig::load()?;
+    let backend = resolve_backend(&global_config, &config, backend_override)?;
     let template = match template_name {
         Some(name) => Some(
             config
@@ -60,20 +67,26 @@ pub async fn run(name: &str, note: Option<&str>, template_name: Option<&str>) ->
         worktree::create(&git_root, &full_name, &config)?
     };
 
-    println!("Starting Claude session...");
+    println!("Starting {} session...", backend.name);
     let setup = merge_setup(&config, template);
     if !setup.is_empty() {
         println!("Setup: {}", setup.join(" && "));
     }
     let session_manager = SessionManager::new();
-    let tmux_session =
-        session_manager.create(&project.name, &branch_name, &worktree_path, &setup)?;
+    let tmux_session = session_manager.create(
+        &project.name,
+        &branch_name,
+        &worktree_path,
+        &setup,
+        &backend,
+    )?;
 
     db.add_session(
         project.id,
         &branch_name,
         &worktree_path,
         &tmux_session,
+        &backend.name,
         note,
     )?;
 

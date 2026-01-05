@@ -32,9 +32,10 @@ pub async fn run() -> Result<()> {
             "stopped"
         };
         println!(
-            "  {} [{}] - {}",
+            "  {} [{}] ({}) - {}",
             session.name,
             status,
+            session.backend,
             session.worktree_path.display()
         );
     }
