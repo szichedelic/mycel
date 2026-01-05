@@ -24,7 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::bank::{self, BankedItem};
 use crate::config::{ProjectConfig, TemplateConfig};
 use crate::confirm;
-use crate::db::{Database, Project, Session};
+use crate::db::{Database, Project, Session, SessionHistory};
 use crate::disk;
 use crate::session::SessionManager;
 use crate::worktree;
@@ -38,6 +38,7 @@ struct App {
     db: Database,
     session_manager: SessionManager,
     projects: Vec<ProjectWithSessions>,
+    history: Vec<HistoryEntry>,
     banked: Vec<(String, BankedItem)>,
     total_worktree_bytes: u64,
     disk_usage: Option<disk::DiskUsage>,
@@ -50,6 +51,7 @@ struct App {
     preview_text: String,
     preview_session_id: Option<i64>,
     last_click: Option<ClickState>,
+    history_mode: bool,
 }
 
 struct ProjectWithSessions {
@@ -62,6 +64,11 @@ struct SessionWithStatus {
     session: Session,
     is_running: bool,
     worktree_bytes: Option<u64>,
+}
+
+struct HistoryEntry {
+    project: Project,
+    session: SessionHistory,
 }
 
 struct ClickState {
@@ -78,6 +85,7 @@ impl App {
             db,
             session_manager,
             projects: Vec::new(),
+            history: Vec::new(),
             banked: Vec::new(),
             total_worktree_bytes: 0,
             disk_usage: None,
@@ -90,6 +98,7 @@ impl App {
             preview_text: String::new(),
             preview_session_id: None,
             last_click: None,
+            history_mode: false,
         };
 
         app.refresh()?;
@@ -148,6 +157,20 @@ impl App {
         self.projects = refreshed_projects;
         self.total_worktree_bytes = total_worktree_bytes;
         self.disk_usage = lowest_disk_usage(&disk_usages);
+
+        let mut history_entries = Vec::new();
+        for project in &self.projects {
+            if let Ok(items) = self.db.list_session_history(project.project.id) {
+                for session in items {
+                    history_entries.push(HistoryEntry {
+                        project: project.project.clone(),
+                        session,
+                    });
+                }
+            }
+        }
+        history_entries.sort_by(|a, b| b.session.ended_at_unix.cmp(&a.session.ended_at_unix));
+        self.history = history_entries;
 
         self.banked.clear();
         for project in &self.projects {
@@ -213,6 +236,14 @@ impl App {
     }
 
     fn update_preview(&mut self, force: bool) {
+        if self.history_mode {
+            if self.preview_session_id.is_some() || !self.preview_text.is_empty() {
+                self.preview_session_id = None;
+                self.preview_text.clear();
+            }
+            return;
+        }
+
         if !self.preview_enabled {
             self.preview_text.clear();
             self.preview_session_id = None;
@@ -259,7 +290,7 @@ impl App {
             ViewItem::Banked { project_name, item } => {
                 Some(SelectedItem::Banked(project_name, item))
             }
-            ViewItem::Spacer | ViewItem::BankedHeader => None,
+            ViewItem::Spacer | ViewItem::BankedHeader | ViewItem::HistoryHeader | ViewItem::History { .. } => None,
         }
     }
 
@@ -323,6 +354,31 @@ impl App {
         let mut items = Vec::new();
         let query = self.search_query.trim();
         let matcher = SkimMatcherV2::default().ignore_case();
+
+        if self.history_mode {
+            let mut matches = Vec::new();
+            for entry in &self.history {
+                let matches_query = query.is_empty()
+                    || matcher
+                        .fuzzy_match(&entry.session.name, query)
+                        .is_some()
+                    || matcher
+                        .fuzzy_match(&entry.project.name, query)
+                        .is_some();
+                if matches_query {
+                    matches.push(entry);
+                }
+            }
+
+            if !matches.is_empty() {
+                items.push(ViewItem::HistoryHeader);
+                for entry in matches {
+                    items.push(ViewItem::History { entry });
+                }
+            }
+
+            return items;
+        }
 
         for project in &self.projects {
             let mut matching_sessions = Vec::new();
@@ -389,6 +445,10 @@ enum ViewItem<'a> {
         project_name: &'a str,
         item: &'a BankedItem,
     },
+    HistoryHeader,
+    History {
+        entry: &'a HistoryEntry,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -433,6 +493,28 @@ pub async fn run() -> Result<()> {
                             continue;
                         }
 
+                        if app.history_mode {
+                            match key.code {
+                                KeyCode::Char('q') => app.should_quit = true,
+                                KeyCode::Char('j') | KeyCode::Down => app.move_down(),
+                                KeyCode::Char('k') | KeyCode::Up => app.move_up(),
+                                KeyCode::Char('/') => app.search_mode = true,
+                                KeyCode::Esc => app.clear_search(),
+                                KeyCode::Char('r') => {
+                                    app.refresh()?;
+                                    terminal.clear()?;
+                                }
+                                KeyCode::Char('h') => {
+                                    app.history_mode = false;
+                                    app.clamp_selection();
+                                    app.update_preview(true);
+                                    terminal.clear()?;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         match key.code {
                             KeyCode::Char('q') => app.should_quit = true,
                             KeyCode::Char('j') | KeyCode::Down => app.move_down(),
@@ -449,6 +531,12 @@ pub async fn run() -> Result<()> {
                             }
                             KeyCode::Char('v') => {
                                 app.preview_enabled = !app.preview_enabled;
+                                app.update_preview(true);
+                                terminal.clear()?;
+                            }
+                            KeyCode::Char('h') => {
+                                app.history_mode = true;
+                                app.selected = if app.history.is_empty() { 0 } else { 1 };
                                 app.update_preview(true);
                                 terminal.clear()?;
                             }
@@ -687,7 +775,21 @@ pub async fn run() -> Result<()> {
                                             app.session_manager.kill(&tmux_session)?;
                                         }
 
+                                        let config = ProjectConfig::load(&project_path)?;
+                                        let commit_count = worktree::commit_count(
+                                            &project_path,
+                                            &config.base_branch,
+                                            &session_name,
+                                        )
+                                        .ok();
+
                                         let _ = worktree::remove(&project_path, &worktree_path);
+
+                                        app.db.archive_session(
+                                            project.project.id,
+                                            &session.session,
+                                            commit_count,
+                                        )?;
 
                                         app.db.delete_session(session_id)?;
                                     } else {
@@ -774,6 +876,13 @@ pub async fn run() -> Result<()> {
                                                         std::time::Duration::from_millis(1500),
                                                     );
                                                 } else {
+                                                    let commit_count = worktree::commit_count(
+                                                        &project_path,
+                                                        &config.base_branch,
+                                                        &session_name,
+                                                    )
+                                                    .ok();
+
                                                     if app
                                                         .session_manager
                                                         .is_alive(&tmux_session)?
@@ -787,6 +896,12 @@ pub async fn run() -> Result<()> {
                                                         &project_path,
                                                         &worktree_path,
                                                     );
+
+                                                    app.db.archive_session(
+                                                        project.project.id,
+                                                        &session.session,
+                                                        commit_count,
+                                                    )?;
 
                                                     app.db.delete_session(session_id)?;
 
@@ -947,7 +1062,8 @@ fn handle_mouse_event(
                 width: size.width,
                 height: size.height,
             };
-            let (_, list_area, _, _) = split_layout(area, app.preview_enabled);
+            let (_, list_area, _, _) =
+                split_layout(area, app.preview_enabled && !app.history_mode);
             if let Some(index) = list_index_at(app, list_area, mouse.row, mouse.column) {
                 app.selected = index;
                 app.update_preview(false);
@@ -983,7 +1099,7 @@ fn handle_mouse_event(
 
 fn draw_ui(f: &mut Frame, app: &App) {
     let (header_area, list_area, preview_area, footer_area) =
-        split_layout(f.area(), app.preview_enabled);
+        split_layout(f.area(), app.preview_enabled && !app.history_mode);
 
     let now_unix = current_unix_timestamp();
     let session_count: usize = app.projects.iter().map(|p| p.sessions.len()).sum();
@@ -993,6 +1109,13 @@ fn draw_ui(f: &mut Frame, app: &App) {
         .flat_map(|p| &p.sessions)
         .filter(|s| s.is_running)
         .count();
+    let history_count = app.history.len();
+    let total_history_secs: i64 = app
+        .history
+        .iter()
+        .map(|entry| (entry.session.ended_at_unix - entry.session.created_at_unix).max(0))
+        .sum();
+    let total_history = format_duration(total_history_secs);
     let total_worktree = format_bytes(app.total_worktree_bytes);
     let mut disk_spans = vec![
         Span::styled("  Worktrees: ", Style::default().fg(Color::DarkGray)),
@@ -1041,32 +1164,61 @@ fn draw_ui(f: &mut Frame, app: &App) {
             Span::styled("▒░", Style::default().fg(Color::Rgb(0, 60, 80))),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "  M Y C E L",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{session_count} sessions"),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled("  ", Style::default()),
-            Span::styled(
-                format!("{running_count} running"),
-                Style::default().fg(Color::Green),
-            ),
-            if !app.banked.is_empty() {
+        Line::from(if app.history_mode {
+            vec![
                 Span::styled(
-                    format!("  │  {} banked", app.banked.len()),
-                    Style::default().fg(Color::Magenta),
-                )
-            } else {
-                Span::styled("", Style::default())
-            },
-        ]),
+                    "  M Y C E L",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{history_count} history"),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("total {total_history}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                if !app.banked.is_empty() {
+                    Span::styled(
+                        format!("  │  {} banked", app.banked.len()),
+                        Style::default().fg(Color::Magenta),
+                    )
+                } else {
+                    Span::styled("", Style::default())
+                },
+            ]
+        } else {
+            vec![
+                Span::styled(
+                    "  M Y C E L",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{session_count} sessions"),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("{running_count} running"),
+                    Style::default().fg(Color::Green),
+                ),
+                if !app.banked.is_empty() {
+                    Span::styled(
+                        format!("  │  {} banked", app.banked.len()),
+                        Style::default().fg(Color::Magenta),
+                    )
+                } else {
+                    Span::styled("", Style::default())
+                },
+            ]
+        }),
         Line::from(disk_spans),
     ];
 
@@ -1191,17 +1343,84 @@ fn draw_ui(f: &mut Frame, app: &App) {
 
                 items.push(ListItem::new(line));
             }
+            ViewItem::HistoryHeader => items.push(ListItem::new(Line::from(Span::styled(
+                "HISTORY",
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
+            )))),
+            ViewItem::History { entry } => {
+                let duration_secs =
+                    (entry.session.ended_at_unix - entry.session.created_at_unix).max(0);
+                let duration = format_duration(duration_secs);
+                let ended_age = format_relative_age(entry.session.ended_at_unix, now_unix);
+                let commit_text = match entry.session.commit_count {
+                    Some(count) => format!("{count} commits"),
+                    None => "commits n/a".to_string(),
+                };
+
+                let session_style = if idx == app.selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let mut spans = vec![
+                    Span::styled("  - ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&entry.session.name, session_style),
+                    Span::styled(
+                        format!(" ({})", entry.project.name),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(format!("  {duration}"), Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!("  {commit_text}"),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("  ended {ended_age}"),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ];
+
+                if let Some(note) = &entry.session.note {
+                    let note = note.trim();
+                    if !note.is_empty() {
+                        let note = format_note_excerpt(note, 40);
+                        spans.push(Span::styled(
+                            format!("  - {note}"),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
+
+                items.push(ListItem::new(Line::from(spans)));
+            }
         }
     }
 
-    let list_title = if query.is_empty() {
+    let list_title = if app.history_mode {
+        if query.is_empty() {
+            "History".to_string()
+        } else {
+            format!("History (filter: {query})")
+        }
+    } else if query.is_empty() {
         "Sessions".to_string()
     } else {
         format!("Sessions (filter: {query})")
     };
 
     if items.is_empty() {
-        let empty_msg = Paragraph::new(if query.is_empty() {
+        let empty_msg = Paragraph::new(if app.history_mode {
+            if query.is_empty() {
+                "No session history yet."
+            } else {
+                "No matching history."
+            }
+        } else if query.is_empty() {
             "No projects registered. Run 'mycel init' in a git repository."
         } else {
             "No matching sessions."
@@ -1249,8 +1468,12 @@ fn draw_ui(f: &mut Frame, app: &App) {
         f.render_widget(preview, preview_area);
     }
 
-    let mut footer_text = " [a]ttach  [s]pawn  [n]ote  [p]ause  [v]iew  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit"
-        .to_string();
+    let mut footer_text = if app.history_mode {
+        " [h] sessions  [r]efresh  [/] search  [q]uit".to_string()
+    } else {
+        " [a]ttach  [s]pawn  [n]ote  [p]ause  [v]iew  [b]ank  [u]nbank  [x] kill  [h]istory  [r]efresh  [/] search  [q]uit"
+            .to_string()
+    };
     if app.search_mode || !app.search_query.is_empty() {
         footer_text.push_str("  [esc] clear");
         if app.search_mode {
@@ -1390,6 +1613,19 @@ fn format_relative_age(created_at_unix: i64, now_unix: i64) -> String {
         format!("{}d ago", age_secs / 86_400)
     } else {
         format!("{}w ago", age_secs / 604_800)
+    }
+}
+
+fn format_duration(seconds: i64) -> String {
+    let seconds = seconds.max(0) as u64;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else if seconds < 86_400 {
+        format!("{}h {}m", seconds / 3600, (seconds % 3600) / 60)
+    } else {
+        format!("{}d {}h", seconds / 86_400, (seconds % 86_400) / 3600)
     }
 }
 

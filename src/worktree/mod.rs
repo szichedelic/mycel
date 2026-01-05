@@ -158,3 +158,27 @@ pub fn remove(git_root: &Path, worktree_path: &Path) -> Result<()> {
 
     Ok(())
 }
+
+/// Count commits on a branch relative to a base branch
+pub fn commit_count(git_root: &Path, base_branch: &str, branch_name: &str) -> Result<i64> {
+    let output = Command::new("git")
+        .args([
+            "rev-list",
+            "--count",
+            &format!("{base_branch}..{branch_name}"),
+        ])
+        .current_dir(git_root)
+        .output()
+        .context("Failed to count commits")?;
+
+    if !output.status.success() {
+        bail!("git rev-list failed");
+    }
+
+    let count = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<i64>()
+        .unwrap_or(0);
+
+    Ok(count)
+}
