@@ -21,6 +21,7 @@ use crate::bank::{self, BankedItem};
 use crate::config::ProjectConfig;
 use crate::confirm;
 use crate::db::{Database, Project, Session};
+use crate::disk;
 use crate::session::SessionManager;
 use crate::worktree;
 
@@ -31,6 +32,8 @@ struct App {
     session_manager: SessionManager,
     projects: Vec<ProjectWithSessions>,
     banked: Vec<(String, BankedItem)>,
+    total_worktree_bytes: u64,
+    disk_usage: Option<disk::DiskUsage>,
     selected: usize,
     should_quit: bool,
     show_logo: bool,
@@ -47,6 +50,7 @@ struct ProjectWithSessions {
 struct SessionWithStatus {
     session: Session,
     is_running: bool,
+    worktree_bytes: Option<u64>,
 }
 
 impl App {
@@ -59,6 +63,8 @@ impl App {
             session_manager,
             projects: Vec::new(),
             banked: Vec::new(),
+            total_worktree_bytes: 0,
+            disk_usage: None,
             selected: 0,
             should_quit: false,
             show_logo: true,
@@ -72,31 +78,56 @@ impl App {
 
     fn refresh(&mut self) -> Result<()> {
         let projects = self.db.list_projects()?;
-        self.projects = projects
-            .into_iter()
-            .map(|project| {
-                let sessions = self.db.list_sessions(project.id).unwrap_or_default();
-                let sessions_with_status: Vec<SessionWithStatus> = sessions
-                    .into_iter()
-                    .map(|session| {
-                        let is_running = self
-                            .session_manager
-                            .is_alive(&session.tmux_session)
-                            .unwrap_or(false);
-                        SessionWithStatus {
-                            session,
-                            is_running,
-                        }
-                    })
-                    .collect();
+        let mut refreshed_projects = Vec::new();
+        let mut total_worktree_bytes: u64 = 0;
+        let mut disk_usages = Vec::new();
 
-                ProjectWithSessions {
-                    project,
-                    sessions: sessions_with_status,
-                    expanded: true,
+        for project in projects {
+            let sessions = self.db.list_sessions(project.id).unwrap_or_default();
+            let mut sessions_with_status = Vec::new();
+
+            for session in sessions {
+                let is_running = self
+                    .session_manager
+                    .is_alive(&session.tmux_session)
+                    .unwrap_or(false);
+                let worktree_bytes = disk::dir_size_bytes(&session.worktree_path);
+
+                if let Some(size) = worktree_bytes {
+                    total_worktree_bytes = total_worktree_bytes.saturating_add(size);
                 }
-            })
-            .collect();
+
+                if worktree_bytes.is_some() {
+                    if let Some(usage) = disk::filesystem_usage(&session.worktree_path) {
+                        disk_usages.push(usage);
+                    }
+                }
+
+                sessions_with_status.push(SessionWithStatus {
+                    session,
+                    is_running,
+                    worktree_bytes,
+                });
+            }
+
+            refreshed_projects.push(ProjectWithSessions {
+                project,
+                sessions: sessions_with_status,
+                expanded: true,
+            });
+        }
+
+        if disk_usages.is_empty() {
+            for project in &refreshed_projects {
+                if let Some(usage) = disk::filesystem_usage(&project.project.path) {
+                    disk_usages.push(usage);
+                }
+            }
+        }
+
+        self.projects = refreshed_projects;
+        self.total_worktree_bytes = total_worktree_bytes;
+        self.disk_usage = lowest_disk_usage(&disk_usages);
 
         self.banked.clear();
         for project in &self.projects {
@@ -728,6 +759,39 @@ fn draw_ui(f: &mut Frame, app: &App) {
         .flat_map(|p| &p.sessions)
         .filter(|s| s.is_running)
         .count();
+    let total_worktree = format_bytes(app.total_worktree_bytes);
+    let mut disk_spans = vec![
+        Span::styled("  Worktrees: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(total_worktree, Style::default().fg(Color::White)),
+    ];
+
+    if let Some(usage) = app.disk_usage {
+        if let Some(percent) = disk_free_percent(usage) {
+            let free_str = format_bytes(usage.available_bytes);
+            let low_disk = is_low_disk(usage);
+            let free_style = if low_disk {
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+
+            disk_spans.push(Span::styled("  │  Free: ", Style::default().fg(Color::DarkGray)));
+            disk_spans.push(Span::styled(
+                format!("{free_str} ({percent}%)"),
+                free_style,
+            ));
+            if low_disk {
+                disk_spans.push(Span::styled(
+                    "  LOW",
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+        }
+    }
 
     let header_lines = vec![
         Line::from(vec![
@@ -773,6 +837,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
                 Span::styled("", Style::default())
             },
         ]),
+        Line::from(disk_spans),
     ];
 
     let header = Paragraph::new(header_lines).block(Block::default().borders(Borders::BOTTOM));
@@ -841,6 +906,15 @@ fn draw_ui(f: &mut Frame, app: &App) {
                     ),
                     Span::styled(format!("  {age}"), Style::default().fg(Color::DarkGray)),
                 ];
+
+                let size_span = match session.worktree_bytes {
+                    Some(size) => Span::styled(
+                        format!("  {}", format_bytes(size)),
+                        worktree_size_style(size),
+                    ),
+                    None => Span::styled("  n/a", Style::default().fg(Color::DarkGray)),
+                };
+                spans.push(size_span);
 
                 if let Some(note) = &session.session.note {
                     let note = note.trim();
@@ -968,4 +1042,65 @@ fn format_note_excerpt(note: &str, max_len: usize) -> String {
     }
 
     excerpt
+}
+
+const LARGE_WORKTREE_BYTES: u64 = 1024 * 1024 * 1024;
+const HUGE_WORKTREE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+const LOW_DISK_FREE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+const LOW_DISK_FREE_RATIO: f64 = 0.10;
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes < 1024_u64.pow(4) {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else {
+        format!("{:.1} TB", bytes as f64 / (1024.0 * 1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn worktree_size_style(bytes: u64) -> Style {
+    if bytes >= HUGE_WORKTREE_BYTES {
+        Style::default()
+            .fg(Color::Red)
+            .add_modifier(Modifier::BOLD)
+    } else if bytes >= LARGE_WORKTREE_BYTES {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
+fn disk_free_percent(usage: disk::DiskUsage) -> Option<u64> {
+    if usage.total_bytes == 0 {
+        return None;
+    }
+    Some(
+        (usage.available_bytes.saturating_mul(100) / usage.total_bytes)
+            .min(100),
+    )
+}
+
+fn is_low_disk(usage: disk::DiskUsage) -> bool {
+    if usage.total_bytes == 0 {
+        return false;
+    }
+    let free_ratio = usage.available_bytes as f64 / usage.total_bytes as f64;
+    usage.available_bytes < LOW_DISK_FREE_BYTES || free_ratio < LOW_DISK_FREE_RATIO
+}
+
+fn lowest_disk_usage(usages: &[disk::DiskUsage]) -> Option<disk::DiskUsage> {
+    usages
+        .iter()
+        .copied()
+        .filter(|usage| usage.total_bytes > 0)
+        .min_by(|a, b| {
+            let left = (a.available_bytes as u128).saturating_mul(b.total_bytes as u128);
+            let right = (b.available_bytes as u128).saturating_mul(a.total_bytes as u128);
+            left.cmp(&right)
+        })
 }
