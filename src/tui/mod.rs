@@ -148,7 +148,6 @@ enum SelectedItem<'a> {
 }
 
 pub async fn run() -> Result<()> {
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -157,12 +156,13 @@ pub async fn run() -> Result<()> {
 
     let mut app = App::new()?;
 
-    // Show logo briefly
-    terminal.draw(|f| logo::draw(f))?;
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    for frame in 0..5 {
+        terminal.draw(|f| logo::draw_animated(f, frame))?;
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
     app.show_logo = false;
 
-    // Main loop
     loop {
         terminal.draw(|f| draw_ui(f, &app))?;
 
