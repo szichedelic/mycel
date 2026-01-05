@@ -385,6 +385,53 @@ pub async fn run() -> Result<()> {
                                 app.refresh()?;
                             }
                         }
+                        KeyCode::Char('u') => {
+                            if let Some(SelectedItem::Banked(project_name, item)) = app.get_selected_item() {
+                                let project_name = project_name.to_string();
+                                let item_name = item.name.clone();
+
+                                if let Some(proj) = app.projects.iter().find(|p| p.project.name == project_name) {
+                                    let git_root = proj.project.path.clone();
+                                    let project_id = proj.project.id;
+                                    let bundle_path = bank::bundle_path(&project_name, &item_name)?;
+
+                                    disable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        LeaveAlternateScreen,
+                                        DisableMouseCapture
+                                    )?;
+
+                                    println!("Restoring '{}'...", item_name);
+                                    if let Err(e) = bank::restore_bundle(&git_root, &bundle_path, &item_name) {
+                                        println!("Error restoring bundle: {}", e);
+                                        std::thread::sleep(std::time::Duration::from_millis(1000));
+                                    } else {
+                                        bank::delete_bundle(&bundle_path)?;
+
+                                        let config = ProjectConfig::load(&git_root)?;
+                                        println!("Creating worktree...");
+                                        let (worktree_path, branch_name) = worktree::create_from_existing(&git_root, &item_name, &config)?;
+
+                                        println!("Starting Claude session...");
+                                        let tmux_session = app.session_manager.create(&project_name, &branch_name, &worktree_path, &config.setup)?;
+                                        app.db.add_session(project_id, &branch_name, &worktree_path, &tmux_session)?;
+
+                                        println!("Session '{}' restored.", item_name);
+                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                    }
+
+                                    enable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        EnterAlternateScreen,
+                                        EnableMouseCapture
+                                    )?;
+                                    terminal.clear()?;
+                                    app.refresh()?;
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
