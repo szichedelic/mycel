@@ -4,6 +4,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -32,6 +34,8 @@ struct App {
     selected: usize,
     should_quit: bool,
     show_logo: bool,
+    search_query: String,
+    search_mode: bool,
 }
 
 struct ProjectWithSessions {
@@ -58,6 +62,8 @@ impl App {
             selected: 0,
             should_quit: false,
             show_logo: true,
+            search_query: String::new(),
+            search_mode: false,
         };
 
         app.refresh()?;
@@ -101,52 +107,27 @@ impl App {
             }
         }
 
+        self.clamp_selection();
         Ok(())
     }
 
     fn total_items(&self) -> usize {
-        let project_items: usize = self
-            .projects
-            .iter()
-            .map(|p| 1 + if p.expanded { p.sessions.len() } else { 0 })
-            .sum();
-
-        if self.banked.is_empty() {
-            project_items
-        } else {
-            project_items + 2 + self.banked.len()
-        }
+        self.view_items().len()
     }
 
     fn get_selected_item(&self) -> Option<SelectedItem> {
-        let mut idx = 0;
-        for project in &self.projects {
-            if idx == self.selected {
-                return Some(SelectedItem::Project(project));
+        let items = self.view_items();
+        let item = items.get(self.selected)?;
+        match item {
+            ViewItem::Project(project) => Some(SelectedItem::Project(project)),
+            ViewItem::Session { project, session, .. } => {
+                Some(SelectedItem::Session(project, session))
             }
-            idx += 1;
-
-            if project.expanded {
-                for session in &project.sessions {
-                    if idx == self.selected {
-                        return Some(SelectedItem::Session(project, session));
-                    }
-                    idx += 1;
-                }
+            ViewItem::Banked { project_name, item } => {
+                Some(SelectedItem::Banked(project_name, item))
             }
+            ViewItem::Spacer | ViewItem::BankedHeader => None,
         }
-
-        if !self.banked.is_empty() {
-            idx += 2;
-            for (project_name, item) in &self.banked {
-                if idx == self.selected {
-                    return Some(SelectedItem::Banked(project_name, item));
-                }
-                idx += 1;
-            }
-        }
-
-        None
     }
 
     fn move_up(&mut self) {
@@ -163,17 +144,90 @@ impl App {
     }
 
     fn toggle_expand(&mut self) {
-        let mut idx = 0;
-        for project in &mut self.projects {
-            if idx == self.selected {
+        let items = self.view_items();
+        let item = items.get(self.selected);
+        if let Some(ViewItem::Project(selected)) = item {
+            if let Some(project) = self
+                .projects
+                .iter_mut()
+                .find(|p| p.project.id == selected.project.id)
+            {
                 project.expanded = !project.expanded;
-                return;
-            }
-            idx += 1;
-            if project.expanded {
-                idx += project.sessions.len();
             }
         }
+    }
+
+    fn clamp_selection(&mut self) {
+        let total = self.total_items();
+        if total == 0 {
+            self.selected = 0;
+        } else if self.selected >= total {
+            self.selected = total - 1;
+        }
+    }
+
+    fn clear_search(&mut self) {
+        if !self.search_query.is_empty() || self.search_mode {
+            self.search_query.clear();
+            self.search_mode = false;
+            self.clamp_selection();
+        }
+    }
+
+    fn view_items(&self) -> Vec<ViewItem<'_>> {
+        let mut items = Vec::new();
+        let query = self.search_query.trim();
+        let matcher = SkimMatcherV2::default().ignore_case();
+
+        for project in &self.projects {
+            let mut matching_sessions = Vec::new();
+            for session in &project.sessions {
+                let matches = query.is_empty()
+                    || matcher
+                        .fuzzy_match(&session.session.name, query)
+                        .is_some();
+                if matches {
+                    matching_sessions.push(session);
+                }
+            }
+
+            if query.is_empty() || !matching_sessions.is_empty() {
+                items.push(ViewItem::Project(project));
+                let show_sessions = project.expanded || !query.is_empty();
+                if show_sessions {
+                    for (idx, session) in matching_sessions.iter().enumerate() {
+                        let is_last = idx + 1 == matching_sessions.len();
+                        items.push(ViewItem::Session {
+                            project,
+                            session,
+                            is_last,
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut banked_matches = Vec::new();
+        for (project_name, item) in &self.banked {
+            let matches =
+                query.is_empty() || matcher.fuzzy_match(&item.name, query).is_some();
+            if matches {
+                banked_matches.push((project_name.as_str(), item));
+            }
+        }
+
+        if !banked_matches.is_empty() {
+            items.push(ViewItem::Spacer);
+            items.push(ViewItem::BankedHeader);
+            for (project_name, item) in banked_matches {
+                items.push(ViewItem::Banked {
+                    project_name,
+                    item,
+                });
+            }
+        }
+
+        items
     }
 }
 
@@ -181,6 +235,21 @@ enum SelectedItem<'a> {
     Project(&'a ProjectWithSessions),
     Session(&'a ProjectWithSessions, &'a SessionWithStatus),
     Banked(&'a str, &'a BankedItem),
+}
+
+enum ViewItem<'a> {
+    Project(&'a ProjectWithSessions),
+    Session {
+        project: &'a ProjectWithSessions,
+        session: &'a SessionWithStatus,
+        is_last: bool,
+    },
+    Spacer,
+    BankedHeader,
+    Banked {
+        project_name: &'a str,
+        item: &'a BankedItem,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -205,11 +274,30 @@ pub async fn run() -> Result<()> {
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
+                    if app.search_mode {
+                        match key.code {
+                            KeyCode::Esc => app.clear_search(),
+                            KeyCode::Enter => app.search_mode = false,
+                            KeyCode::Backspace => {
+                                app.search_query.pop();
+                                app.clamp_selection();
+                            }
+                            KeyCode::Char(c) => {
+                                app.search_query.push(c);
+                                app.clamp_selection();
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     match key.code {
                         KeyCode::Char('q') => app.should_quit = true,
                         KeyCode::Char('j') | KeyCode::Down => app.move_down(),
                         KeyCode::Char('k') | KeyCode::Up => app.move_up(),
                         KeyCode::Enter | KeyCode::Char(' ') => app.toggle_expand(),
+                        KeyCode::Char('/') => app.search_mode = true,
+                        KeyCode::Esc => app.clear_search(),
                         KeyCode::Char('a') => {
                             if let Some(SelectedItem::Session(_, session)) = app.get_selected_item()
                             {
@@ -635,32 +723,38 @@ fn draw_ui(f: &mut Frame, app: &App) {
     f.render_widget(header, chunks[0]);
 
     let mut items: Vec<ListItem> = Vec::new();
-    let mut idx = 0;
+    let query = app.search_query.trim();
+    let view_items = app.view_items();
 
-    for project in &app.projects {
-        let expand_icon = if project.expanded { "▼" } else { "▶" };
-        let project_line = format!(
-            "{} {} ({})",
-            expand_icon,
-            project.project.name,
-            project.project.path.display()
-        );
+    for (idx, item) in view_items.iter().enumerate() {
+        match item {
+            ViewItem::Project(project) => {
+                let expand_icon = if project.expanded || !query.is_empty() {
+                    "▼"
+                } else {
+                    "▶"
+                };
+                let project_line = format!(
+                    "{} {} ({})",
+                    expand_icon,
+                    project.project.name,
+                    project.project.path.display()
+                );
 
-        let style = if idx == app.selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
+                let style = if idx == app.selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
 
-        items.push(ListItem::new(Line::from(Span::styled(project_line, style))));
-        idx += 1;
-
-        if project.expanded {
-            for (i, session) in project.sessions.iter().enumerate() {
-                let is_last = i == project.sessions.len() - 1;
-                let prefix = if is_last { "  └─" } else { "  ├─" };
+                items.push(ListItem::new(Line::from(Span::styled(project_line, style))));
+            }
+            ViewItem::Session {
+                session, is_last, ..
+            } => {
+                let prefix = if *is_last { "  └─" } else { "  ├─" };
                 let status = if session.is_running {
                     Span::styled("●", Style::default().fg(Color::Green))
                 } else {
@@ -693,62 +787,73 @@ fn draw_ui(f: &mut Frame, app: &App) {
                 ]);
 
                 items.push(ListItem::new(line));
-                idx += 1;
+            }
+            ViewItem::Spacer => items.push(ListItem::new(Line::from(""))),
+            ViewItem::BankedHeader => {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    "📦 BANKED",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ))));
+            }
+            ViewItem::Banked { project_name, item } => {
+                let style = if idx == app.selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let line = Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(&item.name, style),
+                    Span::styled(
+                        format!("  ({project_name}) "),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(item.size_human(), Style::default().fg(Color::DarkGray)),
+                ]);
+
+                items.push(ListItem::new(line));
             }
         }
     }
 
-    if !app.banked.is_empty() {
-        items.push(ListItem::new(Line::from("")));
-        items.push(ListItem::new(Line::from(Span::styled(
-            "📦 BANKED",
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ))));
-        idx += 2;
-
-        for (project_name, item) in &app.banked {
-            let style = if idx == app.selected {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            let line = Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(&item.name, style),
-                Span::styled(
-                    format!("  ({project_name}) "),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(item.size_human(), Style::default().fg(Color::DarkGray)),
-            ]);
-
-            items.push(ListItem::new(line));
-            idx += 1;
-        }
-    }
+    let list_title = if query.is_empty() {
+        "Sessions".to_string()
+    } else {
+        format!("Sessions (filter: {query})")
+    };
 
     if items.is_empty() {
-        let empty_msg =
-            Paragraph::new("No projects registered. Run 'mycel init' in a git repository.")
-                .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().borders(Borders::ALL).title("Sessions"));
+        let empty_msg = Paragraph::new(if query.is_empty() {
+            "No projects registered. Run 'mycel init' in a git repository."
+        } else {
+            "No matching sessions."
+        })
+        .style(Style::default().fg(Color::DarkGray))
+        .block(Block::default().borders(Borders::ALL).title(list_title));
         f.render_widget(empty_msg, chunks[1]);
     } else {
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Sessions"))
+            .block(Block::default().borders(Borders::ALL).title(list_title))
             .highlight_style(Style::default().add_modifier(Modifier::BOLD));
         f.render_widget(list, chunks[1]);
     }
 
-    let footer =
-        Paragraph::new(" [a]ttach  [s]pawn  [b]ank  [u]nbank  [x] kill  [r]efresh  [q]uit")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::TOP));
+    let mut footer_text = " [a]ttach  [s]pawn  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit".to_string();
+    if app.search_mode || !app.search_query.is_empty() {
+        footer_text.push_str("  [esc] clear");
+        if app.search_mode {
+            footer_text.push_str("  [enter] done");
+        }
+    }
+
+    let footer = Paragraph::new(footer_text)
+        .style(Style::default().fg(Color::DarkGray))
+        .block(Block::default().borders(Borders::TOP));
     f.render_widget(footer, chunks[2]);
 }
 
