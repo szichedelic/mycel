@@ -226,7 +226,7 @@ pub fn export_bundle(
     let metadata_content =
         toml::to_string(&export_metadata).context("Failed to serialize export metadata")?;
     let mut header = Header::new_gnu();
-    header.set_size(metadata_content.as_bytes().len() as u64);
+    header.set_size(metadata_content.len() as u64);
     header.set_mode(0o644);
     header.set_cksum();
     builder.append_data(&mut header, "metadata.toml", metadata_content.as_bytes())?;
