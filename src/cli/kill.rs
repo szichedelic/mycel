@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::env;
 
+use crate::config::ProjectConfig;
 use crate::confirm;
 use crate::db::Database;
 use crate::session::SessionManager;
@@ -41,11 +42,16 @@ pub async fn run(name: &str, remove_worktree: bool, force: bool) -> Result<()> {
         session_manager.kill(&session.tmux_session)?;
     }
 
+    let config = ProjectConfig::load(&git_root)?;
+    let commit_count = worktree::commit_count(&git_root, &config.base_branch, &session.name).ok();
+
     // Remove worktree if requested
     if remove_worktree {
         println!("Removing worktree...");
         worktree::remove(&git_root, &session.worktree_path)?;
     }
+
+    db.archive_session(project.id, &session, commit_count)?;
 
     // Remove from database
     db.delete_session(session.id)?;

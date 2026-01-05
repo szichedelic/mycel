@@ -1,6 +1,7 @@
 pub mod attach;
 pub mod bank;
 pub mod banked;
+pub mod history;
 pub mod init;
 pub mod kill;
 pub mod list;

@@ -23,6 +23,15 @@ pub struct Session {
     pub created_at_unix: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionHistory {
+    pub name: String,
+    pub note: Option<String>,
+    pub created_at_unix: i64,
+    pub ended_at_unix: i64,
+    pub commit_count: Option<i64>,
+}
+
 impl Database {
     pub fn open() -> Result<Self> {
         let db_path = dirs::data_dir()
@@ -62,6 +71,18 @@ impl Database {
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id),
                 UNIQUE(project_id, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS session_history (
+                id INTEGER PRIMARY KEY,
+                project_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                worktree_path TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL,
+                commit_count INTEGER,
+                FOREIGN KEY (project_id) REFERENCES projects(id)
             );
             ",
         )?;
@@ -213,6 +234,54 @@ impl Database {
                     tmux_session: row.get(3)?,
                     note: row.get(4)?,
                     created_at_unix: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(sessions)
+    }
+
+    pub fn archive_session(
+        &self,
+        project_id: i64,
+        session: &Session,
+        commit_count: Option<i64>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO session_history (project_id, name, worktree_path, note, created_at, ended_at, commit_count)
+             VALUES (?1, ?2, ?3, ?4, datetime(?5, 'unixepoch'), CURRENT_TIMESTAMP, ?6)",
+            params![
+                project_id,
+                session.name,
+                session.worktree_path.to_string_lossy(),
+                session.note.as_deref(),
+                session.created_at_unix,
+                commit_count
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn list_session_history(&self, project_id: i64) -> Result<Vec<SessionHistory>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, note,
+                    CAST(strftime('%s', created_at) AS INTEGER),
+                    CAST(strftime('%s', ended_at) AS INTEGER),
+                    commit_count
+             FROM session_history
+             WHERE project_id = ?1
+             ORDER BY ended_at DESC",
+        )?;
+
+        let sessions = stmt
+            .query_map(params![project_id], |row| {
+                Ok(SessionHistory {
+                    name: row.get(0)?,
+                    note: row.get(1)?,
+                    created_at_unix: row.get(2)?,
+                    ended_at_unix: row.get(3)?,
+                    commit_count: row.get(4)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

@@ -42,6 +42,8 @@ enum Commands {
     },
     /// List worktrees/sessions in current project
     List,
+    /// List session history in current project
+    History,
     /// Kill a session and optionally remove worktree
     Kill {
         /// Name of the session to kill
@@ -106,6 +108,7 @@ async fn main() -> Result<()> {
         Some(Commands::Spawn { name, note }) => cli::spawn::run(&name, note.as_deref()).await,
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,
+        Some(Commands::History) => cli::history::run().await,
         Some(Commands::Kill {
             name,
             remove,

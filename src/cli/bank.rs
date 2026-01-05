@@ -63,6 +63,8 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
 
     // Kill session and remove worktree unless --keep
     if !keep {
+        let commit_count =
+            worktree::commit_count(&git_root, &config.base_branch, &session.name).ok();
         let session_manager = SessionManager::new();
 
         if session_manager.is_alive(&session.tmux_session)? {
@@ -72,6 +74,8 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
 
         println!("Removing worktree...");
         worktree::remove(&git_root, &session.worktree_path)?;
+
+        db.archive_session(project.id, &session, commit_count)?;
 
         // Remove from database
         db.delete_session(session.id)?;
