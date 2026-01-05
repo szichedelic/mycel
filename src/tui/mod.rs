@@ -15,6 +15,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io::{self, Write};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::bank::{self, BankedItem};
@@ -26,6 +27,8 @@ use crate::session::SessionManager;
 use crate::worktree;
 
 mod logo;
+
+const PREVIEW_LINES: usize = 80;
 
 struct App {
     db: Database,
@@ -39,6 +42,9 @@ struct App {
     show_logo: bool,
     search_query: String,
     search_mode: bool,
+    preview_enabled: bool,
+    preview_text: String,
+    preview_session_id: Option<i64>,
 }
 
 struct ProjectWithSessions {
@@ -70,6 +76,9 @@ impl App {
             show_logo: true,
             search_query: String::new(),
             search_mode: false,
+            preview_enabled: false,
+            preview_text: String::new(),
+            preview_session_id: None,
         };
 
         app.refresh()?;
@@ -139,7 +148,40 @@ impl App {
         }
 
         self.clamp_selection();
+        self.update_preview(true);
         Ok(())
+    }
+
+    fn update_preview(&mut self, force: bool) {
+        if !self.preview_enabled {
+            self.preview_text.clear();
+            self.preview_session_id = None;
+            return;
+        }
+
+        let selected = match self.get_selected_item() {
+            Some(SelectedItem::Session(_, session)) => {
+                Some((session.session.id, session.session.tmux_session.clone()))
+            }
+            _ => None,
+        };
+
+        match selected {
+            Some((session_id, tmux_session)) => {
+                if !force && self.preview_session_id == Some(session_id) {
+                    return;
+                }
+                self.preview_session_id = Some(session_id);
+                let output = capture_session_output(&tmux_session, PREVIEW_LINES);
+                self.preview_text = output.unwrap_or_default();
+            }
+            None => {
+                if self.preview_session_id.is_some() {
+                    self.preview_session_id = None;
+                    self.preview_text.clear();
+                }
+            }
+        }
     }
 
     fn total_items(&self) -> usize {
@@ -165,6 +207,7 @@ impl App {
         if self.selected > 0 {
             self.selected -= 1;
         }
+        self.update_preview(false);
     }
 
     fn move_down(&mut self) {
@@ -172,6 +215,7 @@ impl App {
         if total > 0 && self.selected < total - 1 {
             self.selected += 1;
         }
+        self.update_preview(false);
     }
 
     fn toggle_expand(&mut self) {
@@ -192,6 +236,9 @@ impl App {
                 project.expanded = !project.expanded;
             }
         }
+
+        self.clamp_selection();
+        self.update_preview(false);
     }
 
     fn clamp_selection(&mut self) {
@@ -208,6 +255,7 @@ impl App {
             self.search_query.clear();
             self.search_mode = false;
             self.clamp_selection();
+            self.update_preview(false);
         }
     }
 
@@ -312,10 +360,12 @@ pub async fn run() -> Result<()> {
                             KeyCode::Backspace => {
                                 app.search_query.pop();
                                 app.clamp_selection();
+                                app.update_preview(false);
                             }
                             KeyCode::Char(c) => {
                                 app.search_query.push(c);
                                 app.clamp_selection();
+                                app.update_preview(false);
                             }
                             _ => {}
                         }
@@ -373,6 +423,11 @@ pub async fn run() -> Result<()> {
                         }
                         KeyCode::Char('r') => {
                             app.refresh()?;
+                            terminal.clear()?;
+                        }
+                        KeyCode::Char('v') => {
+                            app.preview_enabled = !app.preview_enabled;
+                            app.update_preview(true);
                             terminal.clear()?;
                         }
                         KeyCode::Char('s') => {
@@ -905,6 +960,24 @@ fn draw_ui(f: &mut Frame, app: &App) {
     let header = Paragraph::new(header_lines).block(Block::default().borders(Borders::BOTTOM));
     f.render_widget(header, chunks[0]);
 
+    let main_area = chunks[1];
+    let (list_area, preview_area) = if app.preview_enabled {
+        let split = if main_area.width >= 110 {
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+                .split(main_area)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(main_area)
+        };
+        (split[0], Some(split[1]))
+    } else {
+        (main_area, None)
+    };
+
     let mut items: Vec<ListItem> = Vec::new();
     let query = app.search_query.trim();
     let view_items = app.view_items();
@@ -1040,15 +1113,44 @@ fn draw_ui(f: &mut Frame, app: &App) {
         })
         .style(Style::default().fg(Color::DarkGray))
         .block(Block::default().borders(Borders::ALL).title(list_title));
-        f.render_widget(empty_msg, chunks[1]);
+        f.render_widget(empty_msg, list_area);
     } else {
         let list = List::new(items)
             .block(Block::default().borders(Borders::ALL).title(list_title))
             .highlight_style(Style::default().add_modifier(Modifier::BOLD));
-        f.render_widget(list, chunks[1]);
+        f.render_widget(list, list_area);
     }
 
-    let mut footer_text = " [a]ttach  [s]pawn  [n]ote  [p]ause  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit"
+    if let Some(preview_area) = preview_area {
+        let (preview_title, preview_body, preview_style) = match app.get_selected_item() {
+            Some(SelectedItem::Session(_, session)) => {
+                let status = if session.is_running { "running" } else { "stopped" };
+                let title = format!("Preview: {} ({status})", session.session.name);
+                let body = if !app.preview_text.trim().is_empty() {
+                    app.preview_text.clone()
+                } else if session.is_running {
+                    "No recent output.".to_string()
+                } else {
+                    "Session stopped.".to_string()
+                };
+                (title, body, Style::default().fg(Color::White))
+            }
+            _ => (
+                "Preview".to_string(),
+                "Select a session to preview output.".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
+        };
+
+        let max_lines = preview_area.height.saturating_sub(2) as usize;
+        let preview_body = tail_lines(&preview_body, max_lines);
+        let preview = Paragraph::new(preview_body)
+            .style(preview_style)
+            .block(Block::default().borders(Borders::ALL).title(preview_title));
+        f.render_widget(preview, preview_area);
+    }
+
+    let mut footer_text = " [a]ttach  [s]pawn  [n]ote  [p]ause  [v]iew  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit"
         .to_string();
     if app.search_mode || !app.search_query.is_empty() {
         footer_text.push_str("  [esc] clear");
@@ -1061,6 +1163,43 @@ fn draw_ui(f: &mut Frame, app: &App) {
         .style(Style::default().fg(Color::DarkGray))
         .block(Block::default().borders(Borders::TOP));
     f.render_widget(footer, chunks[2]);
+}
+
+fn capture_session_output(tmux_session: &str, lines: usize) -> Option<String> {
+    let output = Command::new("tmux")
+        .args([
+            "capture-pane",
+            "-p",
+            "-t",
+            tmux_session,
+            "-S",
+            &format!("-{lines}"),
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end_matches('\n')
+            .to_string(),
+    )
+}
+
+fn tail_lines(text: &str, max_lines: usize) -> String {
+    if max_lines == 0 {
+        return String::new();
+    }
+
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= max_lines {
+        return text.to_string();
+    }
+
+    lines[lines.len() - max_lines..].join("\n")
 }
 
 fn current_unix_timestamp() -> i64 {
