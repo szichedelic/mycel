@@ -23,8 +23,25 @@ pub fn find_git_root(from: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-/// Create a new git worktree
-pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<PathBuf> {
+/// Sanitize a name to be a valid git branch name
+pub fn sanitize_branch_name(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            ' ' | '\t' | '~' | '^' | ':' | '?' | '*' | '[' | '\\' => '-',
+            c => c,
+        })
+        .collect::<String>()
+        .replace("..", "-")
+        .replace("@{", "-")
+        .trim_matches(|c| c == '.' || c == '/' || c == '-')
+        .to_string()
+}
+
+/// Create a new git worktree. Returns (worktree_path, sanitized_branch_name)
+pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<(PathBuf, String)> {
+    // Sanitize name for git branch
+    let branch_name = sanitize_branch_name(name);
+
     // Resolve worktree directory
     let worktree_base = if config.worktree_dir.starts_with('/') {
         PathBuf::from(&config.worktree_dir)
@@ -38,7 +55,7 @@ pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<Pat
         .and_then(|n| n.to_str())
         .unwrap_or("project");
 
-    let worktree_path = worktree_base.join(project_name).join(name);
+    let worktree_path = worktree_base.join(project_name).join(&branch_name);
 
     // Ensure parent directory exists
     if let Some(parent) = worktree_path.parent() {
@@ -52,7 +69,7 @@ pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<Pat
             "worktree",
             "add",
             "-b",
-            name,
+            &branch_name,
             &worktree_path.to_string_lossy(),
             &config.base_branch,
         ])
@@ -64,7 +81,47 @@ pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<Pat
         bail!("git worktree add failed");
     }
 
-    Ok(worktree_path)
+    Ok((worktree_path, branch_name))
+}
+
+/// Create a worktree from an existing branch (for unbanking)
+pub fn create_from_existing(git_root: &Path, branch_name: &str, config: &ProjectConfig) -> Result<(PathBuf, String)> {
+    // Resolve worktree directory
+    let worktree_base = if config.worktree_dir.starts_with('/') {
+        PathBuf::from(&config.worktree_dir)
+    } else {
+        git_root.join(&config.worktree_dir)
+    };
+
+    let project_name = git_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project");
+
+    let worktree_path = worktree_base.join(project_name).join(branch_name);
+
+    if let Some(parent) = worktree_path.parent() {
+        std::fs::create_dir_all(parent)
+            .context("Failed to create worktree directory")?;
+    }
+
+    // Create worktree from existing branch (no -b flag)
+    let status = Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            &worktree_path.to_string_lossy(),
+            branch_name,
+        ])
+        .current_dir(git_root)
+        .status()
+        .context("Failed to create git worktree")?;
+
+    if !status.success() {
+        bail!("git worktree add failed");
+    }
+
+    Ok((worktree_path, branch_name.to_string()))
 }
 
 /// Run setup commands in a worktree
