@@ -113,4 +113,27 @@ impl SessionManager {
 
         Ok(())
     }
+
+    /// Send an initial prompt to the running session
+    pub fn send_prompt(&self, tmux_session: &str, prompt: &str) -> Result<()> {
+        for line in prompt.lines() {
+            let line = line.trim_end_matches('\r');
+            let mut args = vec!["send-keys", "-t", tmux_session];
+            if !line.is_empty() {
+                args.push(line);
+            }
+            args.push("Enter");
+
+            let status = Command::new("tmux")
+                .args(&args)
+                .status()
+                .context("Failed to send prompt to tmux session")?;
+
+            if !status.success() {
+                anyhow::bail!("tmux send-keys failed");
+            }
+        }
+
+        Ok(())
+    }
 }
