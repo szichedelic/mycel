@@ -119,6 +119,18 @@ enum Commands {
         #[arg(short, long, default_value_t = 5)]
         interval: u64,
     },
+    /// Serve the TUI over a local web server
+    Web {
+        /// Host to bind (use 0.0.0.0 to reach from your phone)
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to bind
+        #[arg(short, long, default_value_t = 3799)]
+        port: u16,
+        /// Optional access token to protect the web UI
+        #[arg(long)]
+        token: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -164,5 +176,8 @@ async fn main() -> Result<()> {
             cli::bank_import::run(&path, name.as_deref(), force).await
         }
         Some(Commands::Notify { interval }) => cli::notify::run(interval).await,
+        Some(Commands::Web { host, port, token }) => {
+            cli::web::run(&host, port, token.as_deref()).await
+        }
     }
 }

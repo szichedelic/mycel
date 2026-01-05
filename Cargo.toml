@@ -17,6 +17,12 @@ clap = { version = "4", features = ["derive"] }
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
+# Web
+axum = { version = "0.6", features = ["ws"] }
+futures-util = "0.3"
+portable-pty = "0.8"
+serde_json = "1"
+
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 

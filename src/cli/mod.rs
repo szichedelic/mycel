@@ -12,3 +12,4 @@ pub mod projects;
 pub mod spawn;
 pub mod stop;
 pub mod unbank;
+pub mod web;
