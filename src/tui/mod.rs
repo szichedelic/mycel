@@ -14,6 +14,7 @@ use ratatui::{
 };
 use std::io::{self, Write};
 
+use crate::bank::{self, BankedItem};
 use crate::config::ProjectConfig;
 use crate::db::{Database, Project, Session};
 use crate::session::SessionManager;
@@ -25,6 +26,7 @@ struct App {
     db: Database,
     session_manager: SessionManager,
     projects: Vec<ProjectWithSessions>,
+    banked: Vec<(String, BankedItem)>,
     selected: usize,
     should_quit: bool,
     show_logo: bool,
@@ -50,6 +52,7 @@ impl App {
             db,
             session_manager,
             projects: Vec::new(),
+            banked: Vec::new(),
             selected: 0,
             should_quit: false,
             show_logo: true,
@@ -84,14 +87,29 @@ impl App {
             })
             .collect();
 
+        self.banked.clear();
+        for project in &self.projects {
+            if let Ok(items) = bank::list_banked(&project.project.name) {
+                for item in items {
+                    self.banked.push((project.project.name.clone(), item));
+                }
+            }
+        }
+
         Ok(())
     }
 
     fn total_items(&self) -> usize {
-        self.projects
+        let project_items: usize = self.projects
             .iter()
             .map(|p| 1 + if p.expanded { p.sessions.len() } else { 0 })
-            .sum()
+            .sum();
+
+        if self.banked.is_empty() {
+            project_items
+        } else {
+            project_items + 2 + self.banked.len()
+        }
     }
 
     fn get_selected_item(&self) -> Option<SelectedItem> {
@@ -111,6 +129,17 @@ impl App {
                 }
             }
         }
+
+        if !self.banked.is_empty() {
+            idx += 2;
+            for (project_name, item) in &self.banked {
+                if idx == self.selected {
+                    return Some(SelectedItem::Banked(project_name, item));
+                }
+                idx += 1;
+            }
+        }
+
         None
     }
 
@@ -145,6 +174,7 @@ impl App {
 enum SelectedItem<'a> {
     Project(&'a ProjectWithSessions),
     Session(&'a ProjectWithSessions, &'a SessionWithStatus),
+    Banked(&'a str, &'a BankedItem),
 }
 
 pub async fn run() -> Result<()> {
@@ -297,13 +327,12 @@ fn draw_ui(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8), // Header with logo
-            Constraint::Min(0),    // Main content
-            Constraint::Length(3), // Footer
+            Constraint::Length(8),
+            Constraint::Min(0),
+            Constraint::Length(3),
         ])
         .split(f.area());
 
-    // Header with mini logo
     let session_count: usize = app.projects.iter().map(|p| p.sessions.len()).sum();
     let running_count: usize = app.projects.iter()
         .flat_map(|p| &p.sessions)
@@ -334,9 +363,11 @@ fn draw_ui(f: &mut Frame, app: &App) {
             Span::styled(format!("{} sessions", session_count), Style::default().fg(Color::White)),
             Span::styled("  ", Style::default()),
             Span::styled(format!("{} running", running_count), Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::styled("  the network beneath your code", Style::default().fg(Color::DarkGray)),
+            if !app.banked.is_empty() {
+                Span::styled(format!("  │  {} banked", app.banked.len()), Style::default().fg(Color::Magenta))
+            } else {
+                Span::styled("", Style::default())
+            },
         ]),
     ];
 
@@ -344,7 +375,6 @@ fn draw_ui(f: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::BOTTOM));
     f.render_widget(header, chunks[0]);
 
-    // Main content - project/session list
     let mut items: Vec<ListItem> = Vec::new();
     let mut idx = 0;
 
@@ -403,6 +433,35 @@ fn draw_ui(f: &mut Frame, app: &App) {
         }
     }
 
+    if !app.banked.is_empty() {
+        items.push(ListItem::new(Line::from("")));
+        items.push(ListItem::new(Line::from(Span::styled(
+            "📦 BANKED",
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ))));
+        idx += 2;
+
+        for (project_name, item) in &app.banked {
+            let style = if idx == app.selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let line = Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(&item.name, style),
+                Span::styled(format!("  ({}) ", project_name), Style::default().fg(Color::DarkGray)),
+                Span::styled(item.size_human(), Style::default().fg(Color::DarkGray)),
+            ]);
+
+            items.push(ListItem::new(line));
+            idx += 1;
+        }
+    }
+
     if items.is_empty() {
         let empty_msg = Paragraph::new("No projects registered. Run 'mycel init' in a git repository.")
             .style(Style::default().fg(Color::DarkGray))
@@ -415,8 +474,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
         f.render_widget(list, chunks[1]);
     }
 
-    // Footer
-    let footer = Paragraph::new(" [a]ttach  [s]pawn  [x] kill  [r]efresh  [q]uit")
+    let footer = Paragraph::new(" [a]ttach  [s]pawn  [b]ank  [u]nbank  [x] kill  [r]efresh  [q]uit")
         .style(Style::default().fg(Color::DarkGray))
         .block(Block::default().borders(Borders::TOP));
     f.render_widget(footer, chunks[2]);
