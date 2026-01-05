@@ -16,8 +16,8 @@ use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::bank::{self, BankedItem};
-use crate::confirm;
 use crate::config::ProjectConfig;
+use crate::confirm;
 use crate::db::{Database, Project, Session};
 use crate::session::SessionManager;
 use crate::worktree;
@@ -77,7 +77,10 @@ impl App {
                             .session_manager
                             .is_alive(&session.tmux_session)
                             .unwrap_or(false);
-                        SessionWithStatus { session, is_running }
+                        SessionWithStatus {
+                            session,
+                            is_running,
+                        }
                     })
                     .collect();
 
@@ -102,7 +105,8 @@ impl App {
     }
 
     fn total_items(&self) -> usize {
-        let project_items: usize = self.projects
+        let project_items: usize = self
+            .projects
             .iter()
             .map(|p| 1 + if p.expanded { p.sessions.len() } else { 0 })
             .sum();
@@ -242,7 +246,6 @@ pub async fn run() -> Result<()> {
                             };
 
                             if let Some(project) = project {
-
                                 disable_raw_mode()?;
                                 execute!(
                                     terminal.backend_mut(),
@@ -261,17 +264,26 @@ pub async fn run() -> Result<()> {
                                     let sanitized = worktree::sanitize_branch_name(name);
 
                                     let branch_exists = std::process::Command::new("git")
-                                        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", sanitized)])
+                                        .args([
+                                            "show-ref",
+                                            "--verify",
+                                            "--quiet",
+                                            &format!("refs/heads/{sanitized}"),
+                                        ])
                                         .current_dir(&project.path)
                                         .status()
                                         .map(|s| s.success())
                                         .unwrap_or(false);
 
                                     let (worktree_path, branch_name) = if branch_exists {
-                                        println!("Using existing branch '{}'...", sanitized);
-                                        worktree::create_from_existing(&project.path, &sanitized, &config)?
+                                        println!("Using existing branch '{sanitized}'...");
+                                        worktree::create_from_existing(
+                                            &project.path,
+                                            &sanitized,
+                                            &config,
+                                        )?
                                     } else {
-                                        println!("Creating worktree '{}'...", sanitized);
+                                        println!("Creating worktree '{sanitized}'...");
                                         worktree::create(&project.path, name, &config)?
                                     };
 
@@ -279,9 +291,19 @@ pub async fn run() -> Result<()> {
                                     if !config.setup.is_empty() {
                                         println!("Setup: {}", config.setup.join(" && "));
                                     }
-                                    let tmux_session = app.session_manager.create(&project.name, &branch_name, &worktree_path, &config.setup)?;
-                                    app.db.add_session(project.id, &branch_name, &worktree_path, &tmux_session)?;
-                                    println!("Session '{}' created.", branch_name);
+                                    let tmux_session = app.session_manager.create(
+                                        &project.name,
+                                        &branch_name,
+                                        &worktree_path,
+                                        &config.setup,
+                                    )?;
+                                    app.db.add_session(
+                                        project.id,
+                                        &branch_name,
+                                        &worktree_path,
+                                        &tmux_session,
+                                    )?;
+                                    println!("Session '{branch_name}' created.");
                                     std::thread::sleep(std::time::Duration::from_millis(500));
                                 }
 
@@ -296,7 +318,9 @@ pub async fn run() -> Result<()> {
                             }
                         }
                         KeyCode::Char('x') => {
-                            if let Some(SelectedItem::Session(project, session)) = app.get_selected_item() {
+                            if let Some(SelectedItem::Session(project, session)) =
+                                app.get_selected_item()
+                            {
                                 let session_id = session.session.id;
                                 let session_name = session.session.name.clone();
                                 let tmux_session = session.session.tmux_session.clone();
@@ -311,8 +335,7 @@ pub async fn run() -> Result<()> {
                                 )?;
 
                                 let prompt = format!(
-                                    "Kill session '{}' and remove its worktree?",
-                                    session_name
+                                    "Kill session '{session_name}' and remove its worktree?"
                                 );
                                 let confirmed = confirm::prompt_confirm(&prompt)?;
 
@@ -340,7 +363,9 @@ pub async fn run() -> Result<()> {
                             }
                         }
                         KeyCode::Char('b') => {
-                            if let Some(SelectedItem::Session(project, session)) = app.get_selected_item() {
+                            if let Some(SelectedItem::Session(project, session)) =
+                                app.get_selected_item()
+                            {
                                 let session_id = session.session.id;
                                 let session_name = session.session.name.clone();
                                 let tmux_session = session.session.tmux_session.clone();
@@ -360,9 +385,8 @@ pub async fn run() -> Result<()> {
                                     .current_dir(&worktree_path)
                                     .output();
 
-                                let has_changes = status_output
-                                    .map(|o| !o.stdout.is_empty())
-                                    .unwrap_or(false);
+                                let has_changes =
+                                    status_output.map(|o| !o.stdout.is_empty()).unwrap_or(false);
 
                                 if has_changes {
                                     println!("Error: Uncommitted changes in worktree.");
@@ -372,25 +396,37 @@ pub async fn run() -> Result<()> {
                                     std::thread::sleep(std::time::Duration::from_millis(2000));
                                 } else {
                                     let config = ProjectConfig::load(&project_path)?;
-                                    let bundle_path = bank::bundle_path(&project_name, &session_name)?;
+                                    let bundle_path =
+                                        bank::bundle_path(&project_name, &session_name)?;
 
                                     if bundle_path.exists() {
-                                        println!("Error: Bundle already exists: {}", bundle_path.display());
+                                        println!(
+                                            "Error: Bundle already exists: {}",
+                                            bundle_path.display()
+                                        );
                                         std::thread::sleep(std::time::Duration::from_millis(1500));
                                     } else {
                                         let prompt = format!(
-                                            "Banking '{}' will stop the session, remove its worktree, and delete the local branch. Continue?",
-                                            session_name
+                                            "Banking '{session_name}' will stop the session, remove its worktree, and delete the local branch. Continue?"
                                         );
                                         let confirmed = confirm::prompt_confirm(&prompt)?;
                                         if !confirmed {
                                             println!("Cancelled.");
-                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                500,
+                                            ));
                                         } else {
-                                            println!("Banking '{}'...", session_name);
-                                            if let Err(e) = bank::create_bundle(&project_path, &session_name, &config.base_branch, &bundle_path) {
-                                                println!("Error creating bundle: {}", e);
-                                                std::thread::sleep(std::time::Duration::from_millis(1500));
+                                            println!("Banking '{session_name}'...");
+                                            if let Err(e) = bank::create_bundle(
+                                                &project_path,
+                                                &session_name,
+                                                &config.base_branch,
+                                                &bundle_path,
+                                            ) {
+                                                println!("Error creating bundle: {e}");
+                                                std::thread::sleep(
+                                                    std::time::Duration::from_millis(1500),
+                                                );
                                             } else {
                                                 if app.session_manager.is_alive(&tmux_session)? {
                                                     println!("Stopping session...");
@@ -398,7 +434,8 @@ pub async fn run() -> Result<()> {
                                                 }
 
                                                 println!("Removing worktree...");
-                                                let _ = worktree::remove(&project_path, &worktree_path);
+                                                let _ =
+                                                    worktree::remove(&project_path, &worktree_path);
 
                                                 app.db.delete_session(session_id)?;
 
@@ -407,8 +444,10 @@ pub async fn run() -> Result<()> {
                                                     .current_dir(&project_path)
                                                     .status();
 
-                                                println!("Banked '{}'", session_name);
-                                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                                println!("Banked '{session_name}'");
+                                                std::thread::sleep(
+                                                    std::time::Duration::from_millis(500),
+                                                );
                                             }
                                         }
                                     }
@@ -425,14 +464,18 @@ pub async fn run() -> Result<()> {
                             }
                         }
                         KeyCode::Char('u') => {
-                            if let Some(SelectedItem::Banked(project_name, item)) = app.get_selected_item() {
+                            if let Some(SelectedItem::Banked(project_name, item)) =
+                                app.get_selected_item()
+                            {
                                 let project_name = project_name.to_string();
                                 let item_name = item.name.clone();
 
-                                if let Some(proj) = app.projects.iter().find(|p| p.project.name == project_name) {
+                                if let Some(proj) =
+                                    app.projects.iter().find(|p| p.project.name == project_name)
+                                {
                                     let git_root = proj.project.path.clone();
                                     let project_id = proj.project.id;
-                                    let bundle_path = bank::bundle_path(&project_name, &item_name)?;
+                                    let bundle_path = item.path.clone();
 
                                     disable_raw_mode()?;
                                     execute!(
@@ -442,31 +485,51 @@ pub async fn run() -> Result<()> {
                                     )?;
 
                                     let prompt = format!(
-                                        "Unbanking '{}' will restore the branch and delete the bundle. Continue?",
-                                        item_name
+                                        "Unbanking '{item_name}' will restore the branch and delete the bundle. Continue?"
                                     );
                                     let confirmed = confirm::prompt_confirm(&prompt)?;
                                     if !confirmed {
                                         println!("Cancelled.");
                                         std::thread::sleep(std::time::Duration::from_millis(500));
                                     } else {
-                                        println!("Restoring '{}'...", item_name);
-                                        if let Err(e) = bank::restore_bundle(&git_root, &bundle_path, &item_name) {
-                                            println!("Error restoring bundle: {}", e);
-                                            std::thread::sleep(std::time::Duration::from_millis(1000));
+                                        println!("Restoring '{item_name}'...");
+                                        if let Err(e) = bank::restore_bundle(
+                                            &git_root,
+                                            &bundle_path,
+                                            &item_name,
+                                        ) {
+                                            println!("Error restoring bundle: {e}");
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                1000,
+                                            ));
                                         } else {
                                             bank::delete_bundle(&bundle_path)?;
 
                                             let config = ProjectConfig::load(&git_root)?;
                                             println!("Creating worktree...");
-                                            let (worktree_path, branch_name) = worktree::create_from_existing(&git_root, &item_name, &config)?;
+                                            let (worktree_path, branch_name) =
+                                                worktree::create_from_existing(
+                                                    &git_root, &item_name, &config,
+                                                )?;
 
                                             println!("Starting Claude session...");
-                                            let tmux_session = app.session_manager.create(&project_name, &branch_name, &worktree_path, &config.setup)?;
-                                            app.db.add_session(project_id, &branch_name, &worktree_path, &tmux_session)?;
+                                            let tmux_session = app.session_manager.create(
+                                                &project_name,
+                                                &branch_name,
+                                                &worktree_path,
+                                                &config.setup,
+                                            )?;
+                                            app.db.add_session(
+                                                project_id,
+                                                &branch_name,
+                                                &worktree_path,
+                                                &tmux_session,
+                                            )?;
 
-                                            println!("Session '{}' restored.", item_name);
-                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                            println!("Session '{item_name}' restored.");
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                500,
+                                            ));
                                         }
                                     }
 
@@ -515,7 +578,9 @@ fn draw_ui(f: &mut Frame, app: &App) {
 
     let now_unix = current_unix_timestamp();
     let session_count: usize = app.projects.iter().map(|p| p.sessions.len()).sum();
-    let running_count: usize = app.projects.iter()
+    let running_count: usize = app
+        .projects
+        .iter()
         .flat_map(|p| &p.sessions)
         .filter(|s| s.is_running)
         .count();
@@ -539,21 +604,34 @@ fn draw_ui(f: &mut Frame, app: &App) {
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  M Y C E L", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  M Y C E L",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{} sessions", session_count), Style::default().fg(Color::White)),
+            Span::styled(
+                format!("{session_count} sessions"),
+                Style::default().fg(Color::White),
+            ),
             Span::styled("  ", Style::default()),
-            Span::styled(format!("{} running", running_count), Style::default().fg(Color::Green)),
+            Span::styled(
+                format!("{running_count} running"),
+                Style::default().fg(Color::Green),
+            ),
             if !app.banked.is_empty() {
-                Span::styled(format!("  │  {} banked", app.banked.len()), Style::default().fg(Color::Magenta))
+                Span::styled(
+                    format!("  │  {} banked", app.banked.len()),
+                    Style::default().fg(Color::Magenta),
+                )
             } else {
                 Span::styled("", Style::default())
             },
         ]),
     ];
 
-    let header = Paragraph::new(header_lines)
-        .block(Block::default().borders(Borders::BOTTOM));
+    let header = Paragraph::new(header_lines).block(Block::default().borders(Borders::BOTTOM));
     f.render_widget(header, chunks[0]);
 
     let mut items: Vec<ListItem> = Vec::new();
@@ -599,15 +677,19 @@ fn draw_ui(f: &mut Frame, app: &App) {
                 };
 
                 let line = Line::from(vec![
-                    Span::styled(format!("{} ", prefix), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{prefix} "), Style::default().fg(Color::DarkGray)),
                     Span::styled(&session.session.name, session_style),
                     Span::raw("  "),
                     status,
                     Span::styled(
-                        if session.is_running { " running" } else { " stopped" },
+                        if session.is_running {
+                            " running"
+                        } else {
+                            " stopped"
+                        },
                         Style::default().fg(Color::DarkGray),
                     ),
-                    Span::styled(format!("  {}", age), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("  {age}"), Style::default().fg(Color::DarkGray)),
                 ]);
 
                 items.push(ListItem::new(line));
@@ -620,7 +702,9 @@ fn draw_ui(f: &mut Frame, app: &App) {
         items.push(ListItem::new(Line::from("")));
         items.push(ListItem::new(Line::from(Span::styled(
             "📦 BANKED",
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ))));
         idx += 2;
 
@@ -636,7 +720,10 @@ fn draw_ui(f: &mut Frame, app: &App) {
             let line = Line::from(vec![
                 Span::styled("  ", Style::default()),
                 Span::styled(&item.name, style),
-                Span::styled(format!("  ({}) ", project_name), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  ({project_name}) "),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled(item.size_human(), Style::default().fg(Color::DarkGray)),
             ]);
 
@@ -646,9 +733,10 @@ fn draw_ui(f: &mut Frame, app: &App) {
     }
 
     if items.is_empty() {
-        let empty_msg = Paragraph::new("No projects registered. Run 'mycel init' in a git repository.")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title("Sessions"));
+        let empty_msg =
+            Paragraph::new("No projects registered. Run 'mycel init' in a git repository.")
+                .style(Style::default().fg(Color::DarkGray))
+                .block(Block::default().borders(Borders::ALL).title("Sessions"));
         f.render_widget(empty_msg, chunks[1]);
     } else {
         let list = List::new(items)
@@ -657,9 +745,10 @@ fn draw_ui(f: &mut Frame, app: &App) {
         f.render_widget(list, chunks[1]);
     }
 
-    let footer = Paragraph::new(" [a]ttach  [s]pawn  [b]ank  [u]nbank  [x] kill  [r]efresh  [q]uit")
-        .style(Style::default().fg(Color::DarkGray))
-        .block(Block::default().borders(Borders::TOP));
+    let footer =
+        Paragraph::new(" [a]ttach  [s]pawn  [b]ank  [u]nbank  [x] kill  [r]efresh  [q]uit")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::TOP));
     f.render_widget(footer, chunks[2]);
 }
 

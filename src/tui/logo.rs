@@ -5,8 +5,6 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
-use std::time::{Duration, Instant};
-
 const LOGO_FRAMES: [&str; 5] = [
     // Frame 0 - center only
     r#"
@@ -159,10 +157,6 @@ pub fn draw_animated(f: &mut Frame, frame_idx: usize) {
         let name_paragraph = Paragraph::new(name_lines).alignment(Alignment::Center);
         f.render_widget(name_paragraph, inner_chunks[2]);
     }
-}
-
-pub fn draw(f: &mut Frame) {
-    draw_animated(f, LOGO_FRAMES.len() - 1);
 }
 
 fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
