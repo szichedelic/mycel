@@ -2,8 +2,8 @@ use anyhow::{bail, Context, Result};
 use std::env;
 
 use crate::bank;
-use crate::confirm;
 use crate::config::ProjectConfig;
+use crate::confirm;
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::worktree;
@@ -21,24 +21,22 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
     let bundle_path = bank::bundle_path(&project.name, name)?;
 
     if !bundle_path.exists() {
-        bail!("No banked bundle found for '{}'. List banked with: mycel banked", name);
+        bail!("No banked bundle found for '{name}'. List banked with: mycel banked");
     }
 
     println!("Verifying bundle...");
     bank::verify_bundle(&bundle_path)?;
 
     if !force {
-        let prompt = format!(
-            "Unbanking '{}' will restore the branch and delete the bundle. Continue?",
-            name
-        );
+        let prompt =
+            format!("Unbanking '{name}' will restore the branch and delete the bundle. Continue?");
         if !confirm::prompt_confirm(&prompt)? {
             println!("Cancelled.");
             return Ok(());
         }
     }
 
-    println!("Restoring branch '{}'...", name);
+    println!("Restoring branch '{name}'...");
     bank::restore_bundle(&git_root, &bundle_path, name)?;
 
     bank::delete_bundle(&bundle_path)?;
@@ -48,17 +46,19 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
         let config = ProjectConfig::load(&git_root)?;
 
         println!("Creating worktree...");
-        let (worktree_path, branch_name) = worktree::create_from_existing(&git_root, name, &config)?;
+        let (worktree_path, branch_name) =
+            worktree::create_from_existing(&git_root, name, &config)?;
 
         println!("Starting Claude session...");
         let session_manager = SessionManager::new();
-        let tmux_session = session_manager.create(&project.name, &branch_name, &worktree_path, &config.setup)?;
+        let tmux_session =
+            session_manager.create(&project.name, &branch_name, &worktree_path, &config.setup)?;
 
         db.add_session(project.id, &branch_name, &worktree_path, &tmux_session)?;
 
-        println!("\nSession '{}' restored. Attach with: mycel attach {}", name, name);
+        println!("\nSession '{name}' restored. Attach with: mycel attach {name}");
     } else {
-        println!("\nBranch '{}' restored. Create a session with: mycel spawn {}", name, name);
+        println!("\nBranch '{name}' restored. Create a session with: mycel spawn {name}");
     }
 
     Ok(())

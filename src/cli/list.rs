@@ -31,7 +31,12 @@ pub async fn run() -> Result<()> {
         } else {
             "stopped"
         };
-        println!("  {} [{}] - {}", session.name, status, session.worktree_path.display());
+        println!(
+            "  {} [{}] - {}",
+            session.name,
+            status,
+            session.worktree_path.display()
+        );
     }
 
     Ok(())

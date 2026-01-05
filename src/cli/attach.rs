@@ -18,12 +18,12 @@ pub async fn run(name: &str) -> Result<()> {
 
     let session = db
         .get_session_by_name(project.id, name)?
-        .context(format!("Session '{}' not found", name))?;
+        .context(format!("Session '{name}' not found"))?;
 
     let session_manager = SessionManager::new();
 
     if !session_manager.is_alive(&session.tmux_session)? {
-        println!("Session '{}' is not running. Restarting...", name);
+        println!("Session '{name}' is not running. Restarting...");
         let config = ProjectConfig::load(&git_root)?;
         session_manager.create(&project.name, name, &session.worktree_path, &config.setup)?;
     }

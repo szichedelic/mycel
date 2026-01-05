@@ -18,13 +18,13 @@ pub async fn run(name: &str, remove_worktree: bool, force: bool) -> Result<()> {
 
     let session = db
         .get_session_by_name(project.id, name)?
-        .context(format!("Session '{}' not found", name))?;
+        .context(format!("Session '{name}' not found"))?;
 
     if !force {
         let prompt = if remove_worktree {
-            format!("Kill session '{}' and remove its worktree?", name)
+            format!("Kill session '{name}' and remove its worktree?")
         } else {
-            format!("Kill session '{}'?", name)
+            format!("Kill session '{name}'?")
         };
 
         if !confirm::prompt_confirm(&prompt)? {
@@ -37,7 +37,7 @@ pub async fn run(name: &str, remove_worktree: bool, force: bool) -> Result<()> {
 
     // Kill tmux session if running
     if session_manager.is_alive(&session.tmux_session)? {
-        println!("Stopping session '{}'...", name);
+        println!("Stopping session '{name}'...");
         session_manager.kill(&session.tmux_session)?;
     }
 
@@ -50,7 +50,7 @@ pub async fn run(name: &str, remove_worktree: bool, force: bool) -> Result<()> {
     // Remove from database
     db.delete_session(session.id)?;
 
-    println!("Session '{}' killed.", name);
+    println!("Session '{name}' killed.");
     if !remove_worktree {
         println!("Worktree preserved at: {}", session.worktree_path.display());
     }

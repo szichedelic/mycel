@@ -2,9 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod bank;
-mod confirm;
 mod cli;
 mod config;
+mod confirm;
 mod db;
 mod session;
 mod tui;
@@ -87,9 +87,15 @@ async fn main() -> Result<()> {
         Some(Commands::Spawn { name }) => cli::spawn::run(&name).await,
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,
-        Some(Commands::Kill { name, remove, force }) => cli::kill::run(&name, remove, force).await,
+        Some(Commands::Kill {
+            name,
+            remove,
+            force,
+        }) => cli::kill::run(&name, remove, force).await,
         Some(Commands::Bank { name, keep, force }) => cli::bank::run(&name, keep, force).await,
-        Some(Commands::Unbank { name, spawn, force }) => cli::unbank::run(&name, spawn, force).await,
+        Some(Commands::Unbank { name, spawn, force }) => {
+            cli::unbank::run(&name, spawn, force).await
+        }
         Some(Commands::Banked) => cli::banked::run().await,
     }
 }

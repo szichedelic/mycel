@@ -2,8 +2,8 @@ use anyhow::{bail, Context, Result};
 use std::env;
 
 use crate::bank;
-use crate::confirm;
 use crate::config::ProjectConfig;
+use crate::confirm;
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::worktree;
@@ -20,7 +20,7 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
 
     let session = db
         .get_session_by_name(project.id, name)?
-        .context(format!("Session '{}' not found", name))?;
+        .context(format!("Session '{name}' not found"))?;
 
     let config = ProjectConfig::load(&git_root)?;
 
@@ -41,13 +41,15 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
     let bundle_path = bank::bundle_path(&project.name, name)?;
 
     if bundle_path.exists() {
-        bail!("Bundle already exists: {}. Delete it first or use a different name.", bundle_path.display());
+        bail!(
+            "Bundle already exists: {}. Delete it first or use a different name.",
+            bundle_path.display()
+        );
     }
 
     if !keep && !force {
         let prompt = format!(
-            "Banking '{}' will stop the session, remove its worktree, and delete the local branch. Continue?",
-            name
+            "Banking '{name}' will stop the session, remove its worktree, and delete the local branch. Continue?"
         );
         if !confirm::prompt_confirm(&prompt)? {
             println!("Cancelled.");
@@ -55,7 +57,7 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
         }
     }
 
-    println!("Banking '{}'...", name);
+    println!("Banking '{name}'...");
     bank::create_bundle(&git_root, name, &config.base_branch, &bundle_path)?;
     println!("Bundle saved: {}", bundle_path.display());
 
@@ -81,7 +83,7 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
             .status();
     }
 
-    println!("\nBanked '{}'. Restore with: mycel unbank {}", name, name);
+    println!("\nBanked '{name}'. Restore with: mycel unbank {name}");
 
     Ok(())
 }
