@@ -233,14 +233,14 @@ pub async fn run() -> Result<()> {
                             terminal.clear()?;
                         }
                         KeyCode::Char('s') => {
-                            // Get selected project
-                            if let Some(selected) = app.get_selected_item() {
-                                let project = match selected {
-                                    SelectedItem::Project(p) => &p.project,
-                                    SelectedItem::Session(p, _) => &p.project,
-                                };
+                            let project = match app.get_selected_item() {
+                                Some(SelectedItem::Project(p)) => Some(&p.project),
+                                Some(SelectedItem::Session(p, _)) => Some(&p.project),
+                                _ => None,
+                            };
 
-                                // Leave TUI to prompt for name
+                            if let Some(project) = project {
+
                                 disable_raw_mode()?;
                                 execute!(
                                     terminal.backend_mut(),
@@ -256,8 +256,22 @@ pub async fn run() -> Result<()> {
 
                                 if !name.is_empty() {
                                     let config = ProjectConfig::load(&project.path)?;
-                                    let (worktree_path, branch_name) = worktree::create(&project.path, name, &config)?;
-                                    println!("Creating worktree '{}'...", branch_name);
+                                    let sanitized = worktree::sanitize_branch_name(name);
+
+                                    let branch_exists = std::process::Command::new("git")
+                                        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", sanitized)])
+                                        .current_dir(&project.path)
+                                        .status()
+                                        .map(|s| s.success())
+                                        .unwrap_or(false);
+
+                                    let (worktree_path, branch_name) = if branch_exists {
+                                        println!("Using existing branch '{}'...", sanitized);
+                                        worktree::create_from_existing(&project.path, &sanitized, &config)?
+                                    } else {
+                                        println!("Creating worktree '{}'...", sanitized);
+                                        worktree::create(&project.path, name, &config)?
+                                    };
 
                                     println!("Starting Claude session...");
                                     if !config.setup.is_empty() {
@@ -269,7 +283,6 @@ pub async fn run() -> Result<()> {
                                     std::thread::sleep(std::time::Duration::from_millis(500));
                                 }
 
-                                // Restore TUI
                                 enable_raw_mode()?;
                                 execute!(
                                     terminal.backend_mut(),
@@ -281,22 +294,18 @@ pub async fn run() -> Result<()> {
                             }
                         }
                         KeyCode::Char('x') => {
-                            // Kill selected session
                             if let Some(SelectedItem::Session(project, session)) = app.get_selected_item() {
                                 let session_id = session.session.id;
                                 let tmux_session = session.session.tmux_session.clone();
                                 let worktree_path = session.session.worktree_path.clone();
                                 let project_path = project.project.path.clone();
 
-                                // Kill tmux if running
                                 if app.session_manager.is_alive(&tmux_session)? {
                                     app.session_manager.kill(&tmux_session)?;
                                 }
 
-                                // Remove worktree
                                 let _ = worktree::remove(&project_path, &worktree_path);
 
-                                // Remove from database
                                 app.db.delete_session(session_id)?;
                                 app.refresh()?;
                             }
