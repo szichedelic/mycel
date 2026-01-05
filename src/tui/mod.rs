@@ -22,7 +22,7 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::bank::{self, BankedItem};
-use crate::config::ProjectConfig;
+use crate::config::{ProjectConfig, TemplateConfig};
 use crate::confirm;
 use crate::db::{Database, Project, Session};
 use crate::disk;
@@ -467,6 +467,9 @@ pub async fn run() -> Result<()> {
                                         DisableMouseCapture
                                     )?;
 
+                                    let config = ProjectConfig::load(&project.path)?;
+                                    let template_name = prompt_template_selection(&config)?;
+
                                     print!("Session name: ");
                                     io::stdout().flush()?;
                                     let mut name = String::new();
@@ -485,8 +488,15 @@ pub async fn run() -> Result<()> {
                                             Some(note.to_string())
                                         };
 
-                                        let config = ProjectConfig::load(&project.path)?;
-                                        let sanitized = worktree::sanitize_branch_name(name);
+                                        let template = template_name
+                                            .as_ref()
+                                            .and_then(|name| config.templates.get(name));
+                                        let full_name = apply_template_prefix(
+                                            name,
+                                            template.and_then(|t| t.branch_prefix.as_deref()),
+                                        );
+                                        let sanitized =
+                                            worktree::sanitize_branch_name(&full_name);
 
                                         let branch_exists = std::process::Command::new("git")
                                             .args([
@@ -509,18 +519,19 @@ pub async fn run() -> Result<()> {
                                             )?
                                         } else {
                                             println!("Creating worktree '{sanitized}'...");
-                                            worktree::create(&project.path, name, &config)?
+                                            worktree::create(&project.path, &full_name, &config)?
                                         };
 
                                         println!("Starting Claude session...");
-                                        if !config.setup.is_empty() {
-                                            println!("Setup: {}", config.setup.join(" && "));
+                                        let setup = merge_setup(&config, template);
+                                        if !setup.is_empty() {
+                                            println!("Setup: {}", setup.join(" && "));
                                         }
                                         let tmux_session = app.session_manager.create(
                                             &project.name,
                                             &branch_name,
                                             &worktree_path,
-                                            &config.setup,
+                                            &setup,
                                         )?;
                                         app.db.add_session(
                                             project.id,
@@ -529,6 +540,22 @@ pub async fn run() -> Result<()> {
                                             &tmux_session,
                                             note.as_deref(),
                                         )?;
+                                        if let Some(prompt) = template
+                                            .and_then(|t| t.prompt.as_deref())
+                                            .map(str::trim)
+                                            .filter(|p| !p.is_empty())
+                                        {
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                600,
+                                            ));
+                                            if let Err(err) =
+                                                app.session_manager.send_prompt(&tmux_session, prompt)
+                                            {
+                                                println!(
+                                                    "Warning: failed to send template prompt: {err}"
+                                                );
+                                            }
+                                        }
                                         println!("Session '{branch_name}' created.");
                                         std::thread::sleep(std::time::Duration::from_millis(500));
                                     }
@@ -1379,6 +1406,79 @@ fn format_note_excerpt(note: &str, max_len: usize) -> String {
     }
 
     excerpt
+}
+
+fn prompt_template_selection(config: &ProjectConfig) -> Result<Option<String>> {
+    if config.templates.is_empty() {
+        return Ok(None);
+    }
+
+    println!("Templates:");
+    for (idx, (name, template)) in config.templates.iter().enumerate() {
+        let mut details = Vec::new();
+        if let Some(prefix) = template.branch_prefix.as_deref().filter(|p| !p.is_empty()) {
+            details.push(format!("prefix {prefix}"));
+        }
+        if !template.setup.is_empty() {
+            details.push(format!("setup {}", template.setup.len()));
+        }
+        if template
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .is_some()
+        {
+            details.push("prompt".to_string());
+        }
+
+        let detail_text = if details.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", details.join(", "))
+        };
+        println!("  {}. {}{}", idx + 1, name, detail_text);
+    }
+
+    print!("Template (enter to skip): ");
+    io::stdout().flush()?;
+    let mut selection = String::new();
+    io::stdin().read_line(&mut selection)?;
+    let selection = selection.trim();
+    if selection.is_empty() {
+        return Ok(None);
+    }
+
+    if let Ok(index) = selection.parse::<usize>() {
+        if index >= 1 && index <= config.templates.len() {
+            let name = config.templates.keys().nth(index - 1).cloned();
+            return Ok(name);
+        }
+    }
+
+    if config.templates.contains_key(selection) {
+        return Ok(Some(selection.to_string()));
+    }
+
+    println!("Unknown template '{selection}', continuing without template.");
+    Ok(None)
+}
+
+fn apply_template_prefix(name: &str, prefix: Option<&str>) -> String {
+    match prefix {
+        Some(prefix) if !prefix.is_empty() && !name.starts_with(prefix) => {
+            format!("{prefix}{name}")
+        }
+        _ => name.to_string(),
+    }
+}
+
+fn merge_setup(config: &ProjectConfig, template: Option<&TemplateConfig>) -> Vec<String> {
+    let mut setup = config.setup.clone();
+    if let Some(template) = template {
+        setup.extend(template.setup.clone());
+    }
+    setup
 }
 
 const LARGE_WORKTREE_BYTES: u64 = 1024 * 1024 * 1024;

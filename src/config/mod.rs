@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -58,6 +59,8 @@ pub struct ProjectConfig {
     pub worktree_dir: String,
     #[serde(default)]
     pub max_sessions: Option<u32>,
+    #[serde(default)]
+    pub templates: BTreeMap<String, TemplateConfig>,
 }
 
 fn default_base_branch() -> String {
@@ -75,6 +78,7 @@ impl Default for ProjectConfig {
             setup: Vec::new(),
             worktree_dir: default_worktree_dir(),
             max_sessions: None,
+            templates: BTreeMap::new(),
         }
     }
 }
@@ -91,4 +95,14 @@ impl ProjectConfig {
 
         toml::from_str(&content).context("Failed to parse project config")
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateConfig {
+    #[serde(default)]
+    pub branch_prefix: Option<String>,
+    #[serde(default)]
+    pub setup: Vec<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
 }

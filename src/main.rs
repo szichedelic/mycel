@@ -34,6 +34,9 @@ enum Commands {
         /// Optional note for the session
         #[arg(short, long)]
         note: Option<String>,
+        /// Optional session template name
+        #[arg(short, long)]
+        template: Option<String>,
     },
     /// Attach to an existing session
     Attach {
@@ -103,7 +106,9 @@ async fn main() -> Result<()> {
         None => tui::run().await,
         Some(Commands::Init) => cli::init::run().await,
         Some(Commands::Projects) => cli::projects::run().await,
-        Some(Commands::Spawn { name, note }) => cli::spawn::run(&name, note.as_deref()).await,
+        Some(Commands::Spawn { name, note, template }) => {
+            cli::spawn::run(&name, note.as_deref(), template.as_deref()).await
+        }
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,
         Some(Commands::Kill {
