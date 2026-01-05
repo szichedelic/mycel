@@ -13,6 +13,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io::{self, Write};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::bank::{self, BankedItem};
 use crate::config::ProjectConfig;
@@ -464,6 +465,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
         ])
         .split(f.area());
 
+    let now_unix = current_unix_timestamp();
     let session_count: usize = app.projects.iter().map(|p| p.sessions.len()).sum();
     let running_count: usize = app.projects.iter()
         .flat_map(|p| &p.sessions)
@@ -538,6 +540,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
                 } else {
                     Span::styled("○", Style::default().fg(Color::DarkGray))
                 };
+                let age = format_relative_age(session.session.created_at_unix, now_unix);
 
                 let session_style = if idx == app.selected {
                     Style::default()
@@ -556,6 +559,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
                         if session.is_running { " running" } else { " stopped" },
                         Style::default().fg(Color::DarkGray),
                     ),
+                    Span::styled(format!("  {}", age), Style::default().fg(Color::DarkGray)),
                 ]);
 
                 items.push(ListItem::new(line));
@@ -609,4 +613,31 @@ fn draw_ui(f: &mut Frame, app: &App) {
         .style(Style::default().fg(Color::DarkGray))
         .block(Block::default().borders(Borders::TOP));
     f.render_widget(footer, chunks[2]);
+}
+
+fn current_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn format_relative_age(created_at_unix: i64, now_unix: i64) -> String {
+    let age_secs = if now_unix > created_at_unix {
+        (now_unix - created_at_unix) as u64
+    } else {
+        0
+    };
+
+    if age_secs < 60 {
+        "just now".to_string()
+    } else if age_secs < 3600 {
+        format!("{}m ago", age_secs / 60)
+    } else if age_secs < 86_400 {
+        format!("{}h ago", age_secs / 3600)
+    } else if age_secs < 604_800 {
+        format!("{}d ago", age_secs / 86_400)
+    } else {
+        format!("{}w ago", age_secs / 604_800)
+    }
 }
