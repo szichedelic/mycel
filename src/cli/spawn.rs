@@ -1,10 +1,20 @@
 use anyhow::{bail, Context, Result};
 use std::env;
+use std::process::Command;
 
 use crate::config::ProjectConfig;
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::worktree;
+
+fn branch_exists(git_root: &std::path::Path, branch_name: &str) -> bool {
+    Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch_name)])
+        .current_dir(git_root)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
 
 pub async fn run(name: &str) -> Result<()> {
     let current_dir = env::current_dir().context("Failed to get current directory")?;
@@ -24,10 +34,14 @@ pub async fn run(name: &str) -> Result<()> {
 
     let config = ProjectConfig::load(&git_root)?;
 
-    println!("Creating worktree '{}'...", sanitized_name);
-    let (worktree_path, branch_name) = worktree::create(&git_root, name, &config)?;
+    let (worktree_path, branch_name) = if branch_exists(&git_root, &sanitized_name) {
+        println!("Using existing branch '{}'...", sanitized_name);
+        worktree::create_from_existing(&git_root, &sanitized_name, &config)?
+    } else {
+        println!("Creating worktree '{}'...", sanitized_name);
+        worktree::create(&git_root, name, &config)?
+    };
 
-    // Setup commands run in the tmux shell
     println!("Starting Claude session...");
     if !config.setup.is_empty() {
         println!("Setup: {}", config.setup.join(" && "));
