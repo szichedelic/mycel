@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use std::env;
 
+use crate::confirm;
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::worktree;
 
-pub async fn run(name: &str, remove_worktree: bool) -> Result<()> {
+pub async fn run(name: &str, remove_worktree: bool, force: bool) -> Result<()> {
     let current_dir = env::current_dir().context("Failed to get current directory")?;
     let git_root = worktree::find_git_root(&current_dir)?;
 
@@ -18,6 +19,19 @@ pub async fn run(name: &str, remove_worktree: bool) -> Result<()> {
     let session = db
         .get_session_by_name(project.id, name)?
         .context(format!("Session '{}' not found", name))?;
+
+    if !force {
+        let prompt = if remove_worktree {
+            format!("Kill session '{}' and remove its worktree?", name)
+        } else {
+            format!("Kill session '{}'?", name)
+        };
+
+        if !confirm::prompt_confirm(&prompt)? {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
 
     let session_manager = SessionManager::new();
 

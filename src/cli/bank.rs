@@ -2,12 +2,13 @@ use anyhow::{bail, Context, Result};
 use std::env;
 
 use crate::bank;
+use crate::confirm;
 use crate::config::ProjectConfig;
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::worktree;
 
-pub async fn run(name: &str, keep: bool) -> Result<()> {
+pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
     let current_dir = env::current_dir().context("Failed to get current directory")?;
     let git_root = worktree::find_git_root(&current_dir)?;
 
@@ -41,6 +42,17 @@ pub async fn run(name: &str, keep: bool) -> Result<()> {
 
     if bundle_path.exists() {
         bail!("Bundle already exists: {}. Delete it first or use a different name.", bundle_path.display());
+    }
+
+    if !keep && !force {
+        let prompt = format!(
+            "Banking '{}' will stop the session, remove its worktree, and delete the local branch. Continue?",
+            name
+        );
+        if !confirm::prompt_confirm(&prompt)? {
+            println!("Cancelled.");
+            return Ok(());
+        }
     }
 
     println!("Banking '{}'...", name);

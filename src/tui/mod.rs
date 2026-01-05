@@ -16,6 +16,7 @@ use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::bank::{self, BankedItem};
+use crate::confirm;
 use crate::config::ProjectConfig;
 use crate::db::{Database, Project, Session};
 use crate::session::SessionManager;
@@ -297,17 +298,44 @@ pub async fn run() -> Result<()> {
                         KeyCode::Char('x') => {
                             if let Some(SelectedItem::Session(project, session)) = app.get_selected_item() {
                                 let session_id = session.session.id;
+                                let session_name = session.session.name.clone();
                                 let tmux_session = session.session.tmux_session.clone();
                                 let worktree_path = session.session.worktree_path.clone();
                                 let project_path = project.project.path.clone();
 
-                                if app.session_manager.is_alive(&tmux_session)? {
-                                    app.session_manager.kill(&tmux_session)?;
+                                disable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    LeaveAlternateScreen,
+                                    DisableMouseCapture
+                                )?;
+
+                                let prompt = format!(
+                                    "Kill session '{}' and remove its worktree?",
+                                    session_name
+                                );
+                                let confirmed = confirm::prompt_confirm(&prompt)?;
+
+                                if confirmed {
+                                    if app.session_manager.is_alive(&tmux_session)? {
+                                        app.session_manager.kill(&tmux_session)?;
+                                    }
+
+                                    let _ = worktree::remove(&project_path, &worktree_path);
+
+                                    app.db.delete_session(session_id)?;
+                                } else {
+                                    println!("Cancelled.");
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
                                 }
 
-                                let _ = worktree::remove(&project_path, &worktree_path);
-
-                                app.db.delete_session(session_id)?;
+                                enable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    EnterAlternateScreen,
+                                    EnableMouseCapture
+                                )?;
+                                terminal.clear()?;
                                 app.refresh()?;
                             }
                         }
@@ -350,28 +378,38 @@ pub async fn run() -> Result<()> {
                                         println!("Error: Bundle already exists: {}", bundle_path.display());
                                         std::thread::sleep(std::time::Duration::from_millis(1500));
                                     } else {
-                                        println!("Banking '{}'...", session_name);
-                                        if let Err(e) = bank::create_bundle(&project_path, &session_name, &config.base_branch, &bundle_path) {
-                                            println!("Error creating bundle: {}", e);
-                                            std::thread::sleep(std::time::Duration::from_millis(1500));
-                                        } else {
-                                            if app.session_manager.is_alive(&tmux_session)? {
-                                                println!("Stopping session...");
-                                                app.session_manager.kill(&tmux_session)?;
-                                            }
-
-                                            println!("Removing worktree...");
-                                            let _ = worktree::remove(&project_path, &worktree_path);
-
-                                            app.db.delete_session(session_id)?;
-
-                                            let _ = std::process::Command::new("git")
-                                                .args(["branch", "-D", &session_name])
-                                                .current_dir(&project_path)
-                                                .status();
-
-                                            println!("Banked '{}'", session_name);
+                                        let prompt = format!(
+                                            "Banking '{}' will stop the session, remove its worktree, and delete the local branch. Continue?",
+                                            session_name
+                                        );
+                                        let confirmed = confirm::prompt_confirm(&prompt)?;
+                                        if !confirmed {
+                                            println!("Cancelled.");
                                             std::thread::sleep(std::time::Duration::from_millis(500));
+                                        } else {
+                                            println!("Banking '{}'...", session_name);
+                                            if let Err(e) = bank::create_bundle(&project_path, &session_name, &config.base_branch, &bundle_path) {
+                                                println!("Error creating bundle: {}", e);
+                                                std::thread::sleep(std::time::Duration::from_millis(1500));
+                                            } else {
+                                                if app.session_manager.is_alive(&tmux_session)? {
+                                                    println!("Stopping session...");
+                                                    app.session_manager.kill(&tmux_session)?;
+                                                }
+
+                                                println!("Removing worktree...");
+                                                let _ = worktree::remove(&project_path, &worktree_path);
+
+                                                app.db.delete_session(session_id)?;
+
+                                                let _ = std::process::Command::new("git")
+                                                    .args(["branch", "-D", &session_name])
+                                                    .current_dir(&project_path)
+                                                    .status();
+
+                                                println!("Banked '{}'", session_name);
+                                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                            }
                                         }
                                     }
                                 }
@@ -403,23 +441,33 @@ pub async fn run() -> Result<()> {
                                         DisableMouseCapture
                                     )?;
 
-                                    println!("Restoring '{}'...", item_name);
-                                    if let Err(e) = bank::restore_bundle(&git_root, &bundle_path, &item_name) {
-                                        println!("Error restoring bundle: {}", e);
-                                        std::thread::sleep(std::time::Duration::from_millis(1000));
-                                    } else {
-                                        bank::delete_bundle(&bundle_path)?;
-
-                                        let config = ProjectConfig::load(&git_root)?;
-                                        println!("Creating worktree...");
-                                        let (worktree_path, branch_name) = worktree::create_from_existing(&git_root, &item_name, &config)?;
-
-                                        println!("Starting Claude session...");
-                                        let tmux_session = app.session_manager.create(&project_name, &branch_name, &worktree_path, &config.setup)?;
-                                        app.db.add_session(project_id, &branch_name, &worktree_path, &tmux_session)?;
-
-                                        println!("Session '{}' restored.", item_name);
+                                    let prompt = format!(
+                                        "Unbanking '{}' will restore the branch and delete the bundle. Continue?",
+                                        item_name
+                                    );
+                                    let confirmed = confirm::prompt_confirm(&prompt)?;
+                                    if !confirmed {
+                                        println!("Cancelled.");
                                         std::thread::sleep(std::time::Duration::from_millis(500));
+                                    } else {
+                                        println!("Restoring '{}'...", item_name);
+                                        if let Err(e) = bank::restore_bundle(&git_root, &bundle_path, &item_name) {
+                                            println!("Error restoring bundle: {}", e);
+                                            std::thread::sleep(std::time::Duration::from_millis(1000));
+                                        } else {
+                                            bank::delete_bundle(&bundle_path)?;
+
+                                            let config = ProjectConfig::load(&git_root)?;
+                                            println!("Creating worktree...");
+                                            let (worktree_path, branch_name) = worktree::create_from_existing(&git_root, &item_name, &config)?;
+
+                                            println!("Starting Claude session...");
+                                            let tmux_session = app.session_manager.create(&project_name, &branch_name, &worktree_path, &config.setup)?;
+                                            app.db.add_session(project_id, &branch_name, &worktree_path, &tmux_session)?;
+
+                                            println!("Session '{}' restored.", item_name);
+                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                        }
                                     }
 
                                     enable_raw_mode()?;
