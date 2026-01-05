@@ -330,8 +330,15 @@ pub async fn run() -> Result<()> {
                         KeyCode::Char('/') => app.search_mode = true,
                         KeyCode::Esc => app.clear_search(),
                         KeyCode::Char('a') => {
-                            if let Some(SelectedItem::Session(_, session)) = app.get_selected_item()
+                            if let Some(SelectedItem::Session(project, session)) =
+                                app.get_selected_item()
                             {
+                                let project_name = project.project.name.clone();
+                                let project_path = project.project.path.clone();
+                                let session_name = session.session.name.clone();
+                                let tmux_session = session.session.tmux_session.clone();
+                                let worktree_path = session.session.worktree_path.clone();
+
                                 // Restore terminal before attaching
                                 disable_raw_mode()?;
                                 execute!(
@@ -340,7 +347,18 @@ pub async fn run() -> Result<()> {
                                     DisableMouseCapture
                                 )?;
 
-                                app.session_manager.attach(&session.session.tmux_session)?;
+                                if !app.session_manager.is_alive(&tmux_session)? {
+                                    println!("Session '{session_name}' is not running. Restarting...");
+                                    let config = ProjectConfig::load(&project_path)?;
+                                    app.session_manager.create(
+                                        &project_name,
+                                        &session_name,
+                                        &worktree_path,
+                                        &config.setup,
+                                    )?;
+                                }
+
+                                app.session_manager.attach(&tmux_session)?;
 
                                 // Restore TUI after detaching
                                 enable_raw_mode()?;
@@ -480,6 +498,50 @@ pub async fn run() -> Result<()> {
                                 app.db.update_session_note(session_id, note.as_deref())?;
                                 println!("Note updated.");
                                 std::thread::sleep(std::time::Duration::from_millis(500));
+
+                                enable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    EnterAlternateScreen,
+                                    EnableMouseCapture
+                                )?;
+                                terminal.clear()?;
+                                app.refresh()?;
+                            }
+                        }
+                        KeyCode::Char('p') => {
+                            if let Some(SelectedItem::Session(_, session)) = app.get_selected_item()
+                            {
+                                let session_name = session.session.name.clone();
+                                let tmux_session = session.session.tmux_session.clone();
+                                let worktree_path = session.session.worktree_path.clone();
+
+                                disable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    LeaveAlternateScreen,
+                                    DisableMouseCapture
+                                )?;
+
+                                let prompt = format!("Stop session '{session_name}'?");
+                                let confirmed = confirm::prompt_confirm(&prompt)?;
+
+                                if confirmed {
+                                    if app.session_manager.is_alive(&tmux_session)? {
+                                        println!("Stopping session '{session_name}'...");
+                                        app.session_manager.kill(&tmux_session)?;
+                                    } else {
+                                        println!("Session '{session_name}' already stopped.");
+                                    }
+                                    println!(
+                                        "Worktree preserved at: {}",
+                                        worktree_path.display()
+                                    );
+                                    std::thread::sleep(std::time::Duration::from_millis(800));
+                                } else {
+                                    println!("Cancelled.");
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                }
 
                                 enable_raw_mode()?;
                                 execute!(
@@ -986,9 +1048,8 @@ fn draw_ui(f: &mut Frame, app: &App) {
         f.render_widget(list, chunks[1]);
     }
 
-    let mut footer_text =
-        " [a]ttach  [s]pawn  [n]ote  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit"
-            .to_string();
+    let mut footer_text = " [a]ttach  [s]pawn  [n]ote  [p]ause  [b]ank  [u]nbank  [x] kill  [r]efresh  [/] search  [q]uit"
+        .to_string();
     if app.search_mode || !app.search_query.is_empty() {
         footer_text.push_str("  [esc] clear");
         if app.search_mode {
