@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod bank;
 mod cli;
 mod config;
 mod db;
@@ -43,6 +44,24 @@ enum Commands {
         #[arg(short, long)]
         remove: bool,
     },
+    /// Bank a completed session (bundle commits for later)
+    Bank {
+        /// Name of the session to bank
+        name: String,
+        /// Keep the session running (don't kill/remove)
+        #[arg(short, long)]
+        keep: bool,
+    },
+    /// Restore a banked session
+    Unbank {
+        /// Name of the banked session
+        name: String,
+        /// Also spawn a new session
+        #[arg(short, long)]
+        spawn: bool,
+    },
+    /// List banked sessions
+    Banked,
 }
 
 #[tokio::main]
@@ -59,5 +78,8 @@ async fn main() -> Result<()> {
         Some(Commands::Attach { name }) => cli::attach::run(&name).await,
         Some(Commands::List) => cli::list::run().await,
         Some(Commands::Kill { name, remove }) => cli::kill::run(&name, remove).await,
+        Some(Commands::Bank { name, keep }) => cli::bank::run(&name, keep).await,
+        Some(Commands::Unbank { name, spawn }) => cli::unbank::run(&name, spawn).await,
+        Some(Commands::Banked) => cli::banked::run().await,
     }
 }
