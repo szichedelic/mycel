@@ -310,6 +310,81 @@ pub async fn run() -> Result<()> {
                                 app.refresh()?;
                             }
                         }
+                        KeyCode::Char('b') => {
+                            if let Some(SelectedItem::Session(project, session)) = app.get_selected_item() {
+                                let session_id = session.session.id;
+                                let session_name = session.session.name.clone();
+                                let tmux_session = session.session.tmux_session.clone();
+                                let worktree_path = session.session.worktree_path.clone();
+                                let project_path = project.project.path.clone();
+                                let project_name = project.project.name.clone();
+
+                                disable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    LeaveAlternateScreen,
+                                    DisableMouseCapture
+                                )?;
+
+                                let status_output = std::process::Command::new("git")
+                                    .args(["status", "--porcelain"])
+                                    .current_dir(&worktree_path)
+                                    .output();
+
+                                let has_changes = status_output
+                                    .map(|o| !o.stdout.is_empty())
+                                    .unwrap_or(false);
+
+                                if has_changes {
+                                    println!("Error: Uncommitted changes in worktree.");
+                                    println!("Commit your work first:");
+                                    println!("  cd {}", worktree_path.display());
+                                    println!("  git add -A && git commit -m \"your message\"");
+                                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                                } else {
+                                    let config = ProjectConfig::load(&project_path)?;
+                                    let bundle_path = bank::bundle_path(&project_name, &session_name)?;
+
+                                    if bundle_path.exists() {
+                                        println!("Error: Bundle already exists: {}", bundle_path.display());
+                                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                                    } else {
+                                        println!("Banking '{}'...", session_name);
+                                        if let Err(e) = bank::create_bundle(&project_path, &session_name, &config.base_branch, &bundle_path) {
+                                            println!("Error creating bundle: {}", e);
+                                            std::thread::sleep(std::time::Duration::from_millis(1500));
+                                        } else {
+                                            if app.session_manager.is_alive(&tmux_session)? {
+                                                println!("Stopping session...");
+                                                app.session_manager.kill(&tmux_session)?;
+                                            }
+
+                                            println!("Removing worktree...");
+                                            let _ = worktree::remove(&project_path, &worktree_path);
+
+                                            app.db.delete_session(session_id)?;
+
+                                            let _ = std::process::Command::new("git")
+                                                .args(["branch", "-D", &session_name])
+                                                .current_dir(&project_path)
+                                                .status();
+
+                                            println!("Banked '{}'", session_name);
+                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                        }
+                                    }
+                                }
+
+                                enable_raw_mode()?;
+                                execute!(
+                                    terminal.backend_mut(),
+                                    EnterAlternateScreen,
+                                    EnableMouseCapture
+                                )?;
+                                terminal.clear()?;
+                                app.refresh()?;
+                            }
+                        }
                         _ => {}
                     }
                 }
