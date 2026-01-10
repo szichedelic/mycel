@@ -78,6 +78,10 @@ pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<(Pa
         bail!("git worktree add failed");
     }
 
+    if !config.symlink_paths.is_empty() {
+        create_symlinks(git_root, &worktree_path, &config.symlink_paths);
+    }
+
     Ok((worktree_path, branch_name))
 }
 
@@ -119,6 +123,10 @@ pub fn create_from_existing(
 
     if !status.success() {
         bail!("git worktree add failed");
+    }
+
+    if !config.symlink_paths.is_empty() {
+        create_symlinks(git_root, &worktree_path, &config.symlink_paths);
     }
 
     Ok((worktree_path, branch_name.to_string()))
@@ -181,4 +189,87 @@ pub fn commit_count(git_root: &Path, base_branch: &str, branch_name: &str) -> Re
         .unwrap_or(0);
 
     Ok(count)
+}
+
+/// Create symlinks in worktree for configured paths
+fn create_symlinks(git_root: &Path, worktree_path: &Path, symlink_paths: &[String]) {
+    for pattern in symlink_paths {
+        let full_pattern = git_root.join(pattern);
+        let pattern_str = full_pattern.to_string_lossy();
+
+        let matches = match glob::glob(&pattern_str) {
+            Ok(paths) => paths,
+            Err(e) => {
+                eprintln!("Warning: invalid glob pattern '{}': {}", pattern, e);
+                continue;
+            }
+        };
+
+        for entry in matches {
+            let source = match entry {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("Warning: glob error for '{}': {}", pattern, e);
+                    continue;
+                }
+            };
+
+            let relative = match source.strip_prefix(git_root) {
+                Ok(rel) => rel,
+                Err(_) => {
+                    eprintln!(
+                        "Warning: path '{}' not relative to git root",
+                        source.display()
+                    );
+                    continue;
+                }
+            };
+
+            let target = worktree_path.join(relative);
+
+            if target.exists() || target.symlink_metadata().is_ok() {
+                continue;
+            }
+
+            if let Some(parent) = target.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!(
+                        "Warning: failed to create parent dir for '{}': {}",
+                        target.display(),
+                        e
+                    );
+                    continue;
+                }
+            }
+
+            #[cfg(unix)]
+            {
+                if let Err(e) = std::os::unix::fs::symlink(&source, &target) {
+                    eprintln!(
+                        "Warning: failed to symlink '{}' -> '{}': {}",
+                        source.display(),
+                        target.display(),
+                        e
+                    );
+                }
+            }
+
+            #[cfg(windows)]
+            {
+                let result = if source.is_dir() {
+                    std::os::windows::fs::symlink_dir(&source, &target)
+                } else {
+                    std::os::windows::fs::symlink_file(&source, &target)
+                };
+                if let Err(e) = result {
+                    eprintln!(
+                        "Warning: failed to symlink '{}' -> '{}': {}",
+                        source.display(),
+                        target.display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
 }
