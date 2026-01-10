@@ -26,7 +26,7 @@ use crate::config::{
     available_backend_names, resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig,
 };
 use crate::confirm;
-use crate::db::{Database, Project, Session, SessionHistory};
+use crate::db::{Database, NewSession, Project, Session, SessionHistory};
 use crate::disk;
 use crate::session::SessionManager;
 use crate::worktree;
@@ -634,15 +634,15 @@ pub async fn run() -> Result<()> {
                                             &setup,
                                             &backend,
                                         )?;
-                                        app.db.add_session(
-                                            project.id,
-                                            &full_name,
-                                            &branch_name,
-                                            &worktree_path,
-                                            &tmux_session,
-                                            &backend.name,
-                                            note.as_deref(),
-                                        )?;
+                                        app.db.add_session(&NewSession {
+                                            project_id: project.id,
+                                            name: &full_name,
+                                            branch_name: &branch_name,
+                                            worktree_path: &worktree_path,
+                                            tmux_session: &tmux_session,
+                                            backend: &backend.name,
+                                            note: note.as_deref(),
+                                        })?;
                                         if let Some(prompt) = template
                                             .and_then(|t| t.prompt.as_deref())
                                             .map(str::trim)
@@ -1035,15 +1035,15 @@ pub async fn run() -> Result<()> {
                                                     &config.setup,
                                                     &backend,
                                                 )?;
-                                                app.db.add_session(
+                                                app.db.add_session(&NewSession {
                                                     project_id,
-                                                    &display_name,
-                                                    &branch_name,
-                                                    &worktree_path,
-                                                    &tmux_session,
-                                                    &backend.name,
-                                                    restored_note.as_deref(),
-                                                )?;
+                                                    name: &display_name,
+                                                    branch_name: &branch_name,
+                                                    worktree_path: &worktree_path,
+                                                    tmux_session: &tmux_session,
+                                                    backend: &backend.name,
+                                                    note: restored_note.as_deref(),
+                                                })?;
 
                                                 println!("Session '{item_name}' restored.");
                                                 std::thread::sleep(

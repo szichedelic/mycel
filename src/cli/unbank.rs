@@ -4,7 +4,7 @@ use std::env;
 use crate::bank;
 use crate::config::{resolve_backend, GlobalConfig, ProjectConfig};
 use crate::confirm;
-use crate::db::Database;
+use crate::db::{Database, NewSession};
 use crate::session::SessionManager;
 use crate::worktree;
 
@@ -69,15 +69,15 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
             &backend,
         )?;
 
-        db.add_session(
-            project.id,
-            &display_name,
-            &branch_name,
-            &worktree_path,
-            &tmux_session,
-            &backend.name,
-            restored_note.as_deref(),
-        )?;
+        db.add_session(&NewSession {
+            project_id: project.id,
+            name: &display_name,
+            branch_name: &branch_name,
+            worktree_path: &worktree_path,
+            tmux_session: &tmux_session,
+            backend: &backend.name,
+            note: restored_note.as_deref(),
+        })?;
 
         println!("\nSession '{name}' restored. Attach with: mycel attach {name}");
     } else {

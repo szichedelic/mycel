@@ -126,7 +126,7 @@ impl ProjectConfig {
 
 fn external_config_path(project_name: &str) -> Option<PathBuf> {
     let config_dir = dirs::config_dir()?.join("mycel").join("projects");
-    Some(config_dir.join(format!("{}.toml", project_name)))
+    Some(config_dir.join(format!("{project_name}.toml")))
 }
 
 fn external_config_path_from_git_root(git_root: &Path) -> Option<PathBuf> {

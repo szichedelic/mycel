@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::config::{resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig};
-use crate::db::Database;
+use crate::db::{Database, NewSession};
 use crate::session::SessionManager;
 use crate::worktree;
 
@@ -78,15 +78,15 @@ pub async fn run(
         &backend,
     )?;
 
-    db.add_session(
-        project.id,
-        &full_name,
-        &branch_name,
-        &worktree_path,
-        &tmux_session,
-        &backend.name,
+    db.add_session(&NewSession {
+        project_id: project.id,
+        name: &full_name,
+        branch_name: &branch_name,
+        worktree_path: &worktree_path,
+        tmux_session: &tmux_session,
+        backend: &backend.name,
         note,
-    )?;
+    })?;
 
     if let Some(prompt) = template
         .and_then(|t| t.prompt.as_deref())

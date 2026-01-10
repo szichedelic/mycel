@@ -34,6 +34,16 @@ pub struct SessionHistory {
     pub commit_count: Option<i64>,
 }
 
+pub struct NewSession<'a> {
+    pub project_id: i64,
+    pub name: &'a str,
+    pub branch_name: &'a str,
+    pub worktree_path: &'a Path,
+    pub tmux_session: &'a str,
+    pub backend: &'a str,
+    pub note: Option<&'a str>,
+}
+
 impl Database {
     pub fn open() -> Result<Self> {
         let db_path = dirs::data_dir()
@@ -218,26 +228,17 @@ impl Database {
         Ok(projects)
     }
 
-    pub fn add_session(
-        &self,
-        project_id: i64,
-        name: &str,
-        branch_name: &str,
-        worktree_path: &Path,
-        tmux_session: &str,
-        backend: &str,
-        note: Option<&str>,
-    ) -> Result<i64> {
+    pub fn add_session(&self, session: &NewSession) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO sessions (project_id, name, branch_name, worktree_path, tmux_session, backend, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                project_id,
-                name,
-                branch_name,
-                worktree_path.to_string_lossy(),
-                tmux_session,
-                backend,
-                note
+                session.project_id,
+                session.name,
+                session.branch_name,
+                session.worktree_path.to_string_lossy(),
+                session.tmux_session,
+                session.backend,
+                session.note
             ],
         )?;
 

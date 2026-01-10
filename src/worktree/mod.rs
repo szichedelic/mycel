@@ -200,7 +200,7 @@ fn create_symlinks(git_root: &Path, worktree_path: &Path, symlink_paths: &[Strin
         let matches = match glob::glob(&pattern_str) {
             Ok(paths) => paths,
             Err(e) => {
-                eprintln!("Warning: invalid glob pattern '{}': {}", pattern, e);
+                eprintln!("Warning: invalid glob pattern '{pattern}': {e}");
                 continue;
             }
         };
@@ -209,7 +209,7 @@ fn create_symlinks(git_root: &Path, worktree_path: &Path, symlink_paths: &[Strin
             let source = match entry {
                 Ok(path) => path,
                 Err(e) => {
-                    eprintln!("Warning: glob error for '{}': {}", pattern, e);
+                    eprintln!("Warning: glob error for '{pattern}': {e}");
                     continue;
                 }
             };
