@@ -25,7 +25,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Register current directory as a project
-    Init,
+    Init {
+        /// Skip interactive setup wizard
+        #[arg(long)]
+        skip_wizard: bool,
+    },
     /// List all registered projects
     Projects,
     /// Create a new worktree with an AI session
@@ -147,7 +151,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         None => tui::run().await,
-        Some(Commands::Init) => cli::init::run().await,
+        Some(Commands::Init { skip_wizard }) => cli::init::run(skip_wizard).await,
         Some(Commands::Projects) => cli::projects::run().await,
         Some(Commands::Spawn {
             name,

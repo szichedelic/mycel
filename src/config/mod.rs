@@ -122,6 +122,28 @@ impl ProjectConfig {
 
         Ok(Self::default())
     }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).context("Failed to create config directory")?;
+        }
+        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        fs::write(path, content).context("Failed to write config file")?;
+        Ok(())
+    }
+
+    pub fn exists(project_root: &Path) -> bool {
+        if let Some(external_path) = external_config_path_from_git_root(project_root) {
+            if external_path.exists() {
+                return true;
+            }
+        }
+        project_root.join(".mycel.toml").exists()
+    }
+}
+
+pub fn get_external_config_path(project_name: &str) -> Option<PathBuf> {
+    external_config_path(project_name)
 }
 
 fn external_config_path(project_name: &str) -> Option<PathBuf> {
