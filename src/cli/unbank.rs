@@ -36,6 +36,13 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
         }
     }
 
+    let metadata = bank::read_metadata(&project.name, name)?;
+    let display_name = metadata
+        .as_ref()
+        .map(|m| m.session_name.clone())
+        .unwrap_or_else(|| name.to_string());
+    let restored_note = metadata.as_ref().and_then(|m| m.note.clone());
+
     println!("Restoring branch '{name}'...");
     bank::restore_bundle(&git_root, &bundle_path, name)?;
 
@@ -64,11 +71,12 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
 
         db.add_session(
             project.id,
+            &display_name,
             &branch_name,
             &worktree_path,
             &tmux_session,
             &backend.name,
-            None,
+            restored_note.as_deref(),
         )?;
 
         println!("\nSession '{name}' restored. Attach with: mycel attach {name}");

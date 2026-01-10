@@ -636,6 +636,7 @@ pub async fn run() -> Result<()> {
                                         )?;
                                         app.db.add_session(
                                             project.id,
+                                            &full_name,
                                             &branch_name,
                                             &worktree_path,
                                             &tmux_session,
@@ -769,6 +770,7 @@ pub async fn run() -> Result<()> {
                                 {
                                     let session_id = session.session.id;
                                     let session_name = session.session.name.clone();
+                                    let branch_name = session.session.branch_name.clone();
                                     let tmux_session = session.session.tmux_session.clone();
                                     let worktree_path = session.session.worktree_path.clone();
                                     let project_path = project.project.path.clone();
@@ -794,7 +796,7 @@ pub async fn run() -> Result<()> {
                                         let commit_count = worktree::commit_count(
                                             &project_path,
                                             &config.base_branch,
-                                            &session_name,
+                                            &branch_name,
                                         )
                                         .ok();
 
@@ -828,6 +830,7 @@ pub async fn run() -> Result<()> {
                                 {
                                     let session_id = session.session.id;
                                     let session_name = session.session.name.clone();
+                                    let branch_name = session.session.branch_name.clone();
                                     let tmux_session = session.session.tmux_session.clone();
                                     let worktree_path = session.session.worktree_path.clone();
                                     let project_path = project.project.path.clone();
@@ -858,7 +861,7 @@ pub async fn run() -> Result<()> {
                                     } else {
                                         let config = ProjectConfig::load(&project_path)?;
                                         let bundle_path =
-                                            bank::bundle_path(&project_name, &session_name)?;
+                                            bank::bundle_path(&project_name, &branch_name)?;
 
                                         if bundle_path.exists() {
                                             println!(
@@ -882,7 +885,7 @@ pub async fn run() -> Result<()> {
                                                 println!("Banking '{session_name}'...");
                                                 if let Err(e) = bank::create_bundle(
                                                     &project_path,
-                                                    &session_name,
+                                                    &branch_name,
                                                     &config.base_branch,
                                                     &bundle_path,
                                                 ) {
@@ -894,7 +897,7 @@ pub async fn run() -> Result<()> {
                                                     let commit_count = worktree::commit_count(
                                                         &project_path,
                                                         &config.base_branch,
-                                                        &session_name,
+                                                        &branch_name,
                                                     )
                                                     .ok();
                                                     let metadata = bank::BankMetadata::new(
@@ -905,7 +908,7 @@ pub async fn run() -> Result<()> {
                                                     );
                                                     if let Err(err) = bank::write_metadata(
                                                         &project_name,
-                                                        &session_name,
+                                                        &branch_name,
                                                         &metadata,
                                                     ) {
                                                         println!(
@@ -936,7 +939,7 @@ pub async fn run() -> Result<()> {
                                                     app.db.delete_session(session_id)?;
 
                                                     let _ = std::process::Command::new("git")
-                                                        .args(["branch", "-D", &session_name])
+                                                        .args(["branch", "-D", &branch_name])
                                                         .current_dir(&project_path)
                                                         .status();
 
@@ -1001,11 +1004,21 @@ pub async fn run() -> Result<()> {
                                                     std::time::Duration::from_millis(1000),
                                                 );
                                             } else {
+                                                let config = ProjectConfig::load(&git_root)?;
+                                                let global_config = GlobalConfig::load()?;
+
+                                                let metadata =
+                                                    bank::read_metadata(&project_name, &item_name)?;
+                                                let display_name = metadata
+                                                    .as_ref()
+                                                    .map(|m| m.session_name.clone())
+                                                    .unwrap_or_else(|| item_name.clone());
+                                                let restored_note =
+                                                    metadata.as_ref().and_then(|m| m.note.clone());
+
                                                 bank::delete_bundle(&bundle_path)?;
                                                 bank::delete_metadata(&project_name, &item_name)?;
 
-                                                let config = ProjectConfig::load(&git_root)?;
-                                                let global_config = GlobalConfig::load()?;
                                                 println!("Creating worktree...");
                                                 let (worktree_path, branch_name) =
                                                     worktree::create_from_existing(
@@ -1024,11 +1037,12 @@ pub async fn run() -> Result<()> {
                                                 )?;
                                                 app.db.add_session(
                                                     project_id,
+                                                    &display_name,
                                                     &branch_name,
                                                     &worktree_path,
                                                     &tmux_session,
                                                     &backend.name,
-                                                    None,
+                                                    restored_note.as_deref(),
                                                 )?;
 
                                                 println!("Session '{item_name}' restored.");

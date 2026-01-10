@@ -52,11 +52,8 @@ pub async fn run(
     let full_name = apply_template_prefix(name, template.and_then(|t| t.branch_prefix.as_deref()));
     let sanitized_name = worktree::sanitize_branch_name(&full_name);
 
-    if db
-        .get_session_by_name(project.id, &sanitized_name)?
-        .is_some()
-    {
-        bail!("Session '{sanitized_name}' already exists in this project");
+    if db.get_session_by_name(project.id, &full_name)?.is_some() {
+        bail!("Session '{full_name}' already exists in this project");
     }
 
     let (worktree_path, branch_name) = if branch_exists(&git_root, &sanitized_name) {
@@ -83,6 +80,7 @@ pub async fn run(
 
     db.add_session(
         project.id,
+        &full_name,
         &branch_name,
         &worktree_path,
         &tmux_session,

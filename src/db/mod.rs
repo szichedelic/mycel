@@ -17,6 +17,7 @@ pub struct Project {
 pub struct Session {
     pub id: i64,
     pub name: String,
+    pub branch_name: String,
     pub worktree_path: PathBuf,
     pub tmux_session: String,
     pub backend: String,
@@ -92,6 +93,7 @@ impl Database {
         self.ensure_sessions_created_at()?;
         self.ensure_sessions_note()?;
         self.ensure_sessions_backend()?;
+        self.ensure_sessions_branch_name()?;
         Ok(())
     }
 
@@ -152,6 +154,25 @@ impl Database {
         Ok(())
     }
 
+    fn ensure_sessions_branch_name(&self) -> Result<()> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'branch_name'",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if count == 0 {
+            self.conn
+                .execute("ALTER TABLE sessions ADD COLUMN branch_name TEXT", [])?;
+            self.conn.execute(
+                "UPDATE sessions SET branch_name = name WHERE branch_name IS NULL",
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
     pub fn add_project(&self, name: &str, path: &Path) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO projects (name, path) VALUES (?1, ?2)",
@@ -201,16 +222,18 @@ impl Database {
         &self,
         project_id: i64,
         name: &str,
+        branch_name: &str,
         worktree_path: &Path,
         tmux_session: &str,
         backend: &str,
         note: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO sessions (project_id, name, worktree_path, tmux_session, backend, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO sessions (project_id, name, branch_name, worktree_path, tmux_session, backend, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 project_id,
                 name,
+                branch_name,
                 worktree_path.to_string_lossy(),
                 tmux_session,
                 backend,
@@ -223,7 +246,7 @@ impl Database {
 
     pub fn get_session_by_name(&self, project_id: i64, name: &str) -> Result<Option<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, worktree_path, tmux_session, backend, note, CAST(strftime('%s', created_at) AS INTEGER)
+            "SELECT id, name, COALESCE(branch_name, name), worktree_path, tmux_session, backend, note, CAST(strftime('%s', created_at) AS INTEGER)
              FROM sessions WHERE project_id = ?1 AND name = ?2",
         )?;
 
@@ -231,11 +254,12 @@ impl Database {
             Ok(Session {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                worktree_path: PathBuf::from(row.get::<_, String>(2)?),
-                tmux_session: row.get(3)?,
-                backend: row.get(4)?,
-                note: row.get(5)?,
-                created_at_unix: row.get(6)?,
+                branch_name: row.get(2)?,
+                worktree_path: PathBuf::from(row.get::<_, String>(3)?),
+                tmux_session: row.get(4)?,
+                backend: row.get(5)?,
+                note: row.get(6)?,
+                created_at_unix: row.get(7)?,
             })
         });
 
@@ -248,7 +272,7 @@ impl Database {
 
     pub fn list_sessions(&self, project_id: i64) -> Result<Vec<Session>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, worktree_path, tmux_session, backend, note, CAST(strftime('%s', created_at) AS INTEGER)
+            "SELECT id, name, COALESCE(branch_name, name), worktree_path, tmux_session, backend, note, CAST(strftime('%s', created_at) AS INTEGER)
              FROM sessions WHERE project_id = ?1",
         )?;
 
@@ -257,11 +281,12 @@ impl Database {
                 Ok(Session {
                     id: row.get(0)?,
                     name: row.get(1)?,
-                    worktree_path: PathBuf::from(row.get::<_, String>(2)?),
-                    tmux_session: row.get(3)?,
-                    backend: row.get(4)?,
-                    note: row.get(5)?,
-                    created_at_unix: row.get(6)?,
+                    branch_name: row.get(2)?,
+                    worktree_path: PathBuf::from(row.get::<_, String>(3)?),
+                    tmux_session: row.get(4)?,
+                    backend: row.get(5)?,
+                    note: row.get(6)?,
+                    created_at_unix: row.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
