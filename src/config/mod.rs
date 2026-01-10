@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalConfig {
@@ -76,6 +76,8 @@ pub struct ProjectConfig {
     pub backends: BTreeMap<String, BackendConfig>,
     #[serde(default)]
     pub templates: BTreeMap<String, TemplateConfig>,
+    #[serde(default)]
+    pub symlink_paths: Vec<String>,
 }
 
 fn default_base_branch() -> String {
@@ -96,22 +98,40 @@ impl Default for ProjectConfig {
             backend: None,
             backends: BTreeMap::new(),
             templates: BTreeMap::new(),
+            symlink_paths: Vec::new(),
         }
     }
 }
 
 impl ProjectConfig {
     pub fn load(project_root: &Path) -> Result<Self> {
-        let config_path = project_root.join(".mycel.toml");
-
-        if !config_path.exists() {
-            return Ok(Self::default());
+        if let Some(external_path) = external_config_path_from_git_root(project_root) {
+            if external_path.exists() {
+                let content = fs::read_to_string(&external_path)
+                    .context("Failed to read external project config")?;
+                return toml::from_str(&content).context("Failed to parse external project config");
+            }
         }
 
-        let content = fs::read_to_string(&config_path).context("Failed to read project config")?;
+        let config_path = project_root.join(".mycel.toml");
+        if config_path.exists() {
+            let content =
+                fs::read_to_string(&config_path).context("Failed to read project config")?;
+            return toml::from_str(&content).context("Failed to parse project config");
+        }
 
-        toml::from_str(&content).context("Failed to parse project config")
+        Ok(Self::default())
     }
+}
+
+fn external_config_path(project_name: &str) -> Option<PathBuf> {
+    let config_dir = dirs::config_dir()?.join("mycel").join("projects");
+    Some(config_dir.join(format!("{}.toml", project_name)))
+}
+
+fn external_config_path_from_git_root(git_root: &Path) -> Option<PathBuf> {
+    let project_name = git_root.file_name()?.to_str()?;
+    external_config_path(project_name)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
