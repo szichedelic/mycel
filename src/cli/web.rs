@@ -357,9 +357,43 @@ fn page_html(token: &str) -> String {
     #terminal {{
       flex: 1;
       background: var(--panel);
+      touch-action: manipulation;
     }}
     .xterm {{
       padding: 8px;
+    }}
+    #keys {{
+      display: none;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      background: linear-gradient(90deg, rgba(9, 16, 19, 0.65), rgba(9, 14, 18, 0.9));
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }}
+    #keys button {{
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(7, 12, 14, 0.7);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }}
+    #keys button:active {{
+      transform: translateY(1px);
+      background: rgba(56, 180, 155, 0.2);
+      border-color: rgba(56, 180, 155, 0.5);
+    }}
+    @media (pointer: coarse), (max-width: 720px) {{
+      #keys {{
+        display: flex;
+      }}
+      #hint {{
+        display: none;
+      }}
     }}
   </style>
 </head>
@@ -372,6 +406,16 @@ fn page_html(token: &str) -> String {
       <div id="hint">tap terminal to type</div>
     </div>
     <div id="terminal"></div>
+    <div id="keys" aria-label="mobile keys">
+      <button type="button" data-key="esc">esc</button>
+      <button type="button" data-key="tab">tab</button>
+      <button type="button" data-key="ctrl_c">ctrl+c</button>
+      <button type="button" data-key="up">up</button>
+      <button type="button" data-key="down">down</button>
+      <button type="button" data-key="left">left</button>
+      <button type="button" data-key="right">right</button>
+      <button type="button" data-key="enter">enter</button>
+    </div>
   </div>
   <script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
   <script src="https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
@@ -392,11 +436,22 @@ fn page_html(token: &str) -> String {
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
     term.focus();
+    if (term.textarea) {{
+      term.textarea.setAttribute('inputmode', 'text');
+      term.textarea.setAttribute('autocorrect', 'off');
+      term.textarea.setAttribute('autocapitalize', 'off');
+      term.textarea.setAttribute('spellcheck', 'false');
+    }}
 
     const statusEl = document.getElementById('status');
     const dot = document.getElementById('dot');
     const focusBtn = document.getElementById('focus');
-    focusBtn.addEventListener('click', () => term.focus());
+    const terminalEl = document.getElementById('terminal');
+    const focusTerminal = () => term.focus();
+    focusBtn.addEventListener('click', focusTerminal);
+    focusBtn.addEventListener('touchstart', focusTerminal, {{ passive: true }});
+    terminalEl.addEventListener('click', focusTerminal);
+    terminalEl.addEventListener('touchstart', focusTerminal, {{ passive: true }});
 
     function updateStatus(text, color) {{
       statusEl.textContent = text;
@@ -454,7 +509,30 @@ fn page_html(token: &str) -> String {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(resizeTerminal, 150);
     }});
-    document.getElementById('terminal').addEventListener('click', () => term.focus());
+    const keySequences = {{
+      esc: '\x1b',
+      tab: '\t',
+      ctrl_c: '\x03',
+      up: '\x1b[A',
+      down: '\x1b[B',
+      right: '\x1b[C',
+      left: '\x1b[D',
+      enter: '\r'
+    }};
+    const keyButtons = document.querySelectorAll('#keys [data-key]');
+    function handleKeyPress(event) {{
+      event.preventDefault();
+      const key = event.currentTarget.getAttribute('data-key');
+      const sequence = keySequences[key];
+      if (sequence) {{
+        sendInput(sequence);
+        focusTerminal();
+      }}
+    }}
+    keyButtons.forEach((button) => {{
+      button.addEventListener('click', handleKeyPress);
+      button.addEventListener('touchstart', handleKeyPress, {{ passive: false }});
+    }});
   </script>
 </body>
 </html>"#
