@@ -58,7 +58,12 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
     }
 
     println!("Banking '{name}'...");
-    bank::create_bundle(&git_root, name, &config.base_branch, &bundle_path)?;
+    bank::create_bundle(
+        &git_root,
+        &session.branch_name,
+        &config.base_branch,
+        &bundle_path,
+    )?;
     println!("Bundle saved: {}", bundle_path.display());
     let metadata = bank::BankMetadata::new(
         project.name.clone(),
@@ -66,14 +71,14 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
         session.note.clone(),
         Some(session.created_at_unix),
     );
-    if let Err(err) = bank::write_metadata(&project.name, &session.name, &metadata) {
+    if let Err(err) = bank::write_metadata(&project.name, &session.branch_name, &metadata) {
         eprintln!("Warning: failed to write bank metadata: {err}");
     }
 
     // Kill session and remove worktree unless --keep
     if !keep {
         let commit_count =
-            worktree::commit_count(&git_root, &config.base_branch, &session.name).ok();
+            worktree::commit_count(&git_root, &config.base_branch, &session.branch_name).ok();
         let session_manager = SessionManager::new();
 
         if session_manager.is_alive(&session.tmux_session)? {
@@ -82,7 +87,7 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
         }
 
         println!("Removing worktree...");
-        worktree::remove(&git_root, &session.worktree_path)?;
+        worktree::remove(&git_root, &session.worktree_path, false)?;
 
         db.archive_session(project.id, &session, commit_count)?;
 
@@ -91,7 +96,7 @@ pub async fn run(name: &str, keep: bool, force: bool) -> Result<()> {
 
         // Also delete the local branch since it's in the bundle now
         let _ = std::process::Command::new("git")
-            .args(["branch", "-D", name])
+            .args(["branch", "-D", &session.branch_name])
             .current_dir(&git_root)
             .status();
     }

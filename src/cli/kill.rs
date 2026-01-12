@@ -43,12 +43,13 @@ pub async fn run(name: &str, remove_worktree: bool, force: bool) -> Result<()> {
     }
 
     let config = ProjectConfig::load(&git_root)?;
-    let commit_count = worktree::commit_count(&git_root, &config.base_branch, &session.name).ok();
+    let commit_count =
+        worktree::commit_count(&git_root, &config.base_branch, &session.branch_name).ok();
 
     // Remove worktree if requested
     if remove_worktree {
         println!("Removing worktree...");
-        worktree::remove(&git_root, &session.worktree_path)?;
+        worktree::remove(&git_root, &session.worktree_path, true)?;
     }
 
     db.archive_session(project.id, &session, commit_count)?;

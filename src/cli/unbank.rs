@@ -56,14 +56,14 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
         let backend = resolve_backend(&global_config, &config, None)?;
 
         println!("Creating worktree...");
-        let (worktree_path, branch_name) =
+        let (worktree_path, session_id) =
             worktree::create_from_existing(&git_root, name, &config)?;
 
         println!("Starting {} session...", backend.name);
         let session_manager = SessionManager::new();
         let tmux_session = session_manager.create(
             &project.name,
-            &branch_name,
+            &session_id,
             &worktree_path,
             &config.setup,
             &backend,
@@ -72,16 +72,16 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
         db.add_session(&NewSession {
             project_id: project.id,
             name: &display_name,
-            branch_name: &branch_name,
+            branch_name: name,
             worktree_path: &worktree_path,
             tmux_session: &tmux_session,
             backend: &backend.name,
             note: restored_note.as_deref(),
         })?;
 
-        println!("\nSession '{name}' restored. Attach with: mycel attach {name}");
+        println!("\nSession '{display_name}' restored. Attach with: mycel attach {display_name}");
     } else {
-        println!("\nBranch '{name}' restored. Create a session with: mycel spawn {name}");
+        println!("\nBranch '{name}' restored. Create a session with: mycel spawn <session-name>");
     }
 
     Ok(())

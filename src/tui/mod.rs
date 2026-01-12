@@ -586,36 +586,13 @@ pub async fn run() -> Result<()> {
 
                                         let template = template_name
                                             .as_ref()
-                                            .and_then(|name| config.templates.get(name));
-                                        let full_name = apply_template_prefix(
-                                            name,
-                                            template.and_then(|t| t.branch_prefix.as_deref()),
-                                        );
-                                        let sanitized = worktree::sanitize_branch_name(&full_name);
+                                            .and_then(|n| config.templates.get(n));
 
-                                        let branch_exists = std::process::Command::new("git")
-                                            .args([
-                                                "show-ref",
-                                                "--verify",
-                                                "--quiet",
-                                                &format!("refs/heads/{sanitized}"),
-                                            ])
-                                            .current_dir(&project.path)
-                                            .status()
-                                            .map(|s| s.success())
-                                            .unwrap_or(false);
+                                        println!("Creating worktree...");
+                                        let (worktree_path, session_id) =
+                                            worktree::create(&project.path, &config)?;
 
-                                        let (worktree_path, branch_name) = if branch_exists {
-                                            println!("Using existing branch '{sanitized}'...");
-                                            worktree::create_from_existing(
-                                                &project.path,
-                                                &sanitized,
-                                                &config,
-                                            )?
-                                        } else {
-                                            println!("Creating worktree '{sanitized}'...");
-                                            worktree::create(&project.path, &full_name, &config)?
-                                        };
+                                        let branch_name = worktree::get_branch(&worktree_path)?;
 
                                         let backend = resolve_backend(
                                             &global_config,
@@ -629,14 +606,14 @@ pub async fn run() -> Result<()> {
                                         }
                                         let tmux_session = app.session_manager.create(
                                             &project.name,
-                                            &branch_name,
+                                            &session_id,
                                             &worktree_path,
                                             &setup,
                                             &backend,
                                         )?;
                                         app.db.add_session(&NewSession {
                                             project_id: project.id,
-                                            name: &full_name,
+                                            name,
                                             branch_name: &branch_name,
                                             worktree_path: &worktree_path,
                                             tmux_session: &tmux_session,
@@ -660,7 +637,7 @@ pub async fn run() -> Result<()> {
                                                 );
                                             }
                                         }
-                                        println!("Session '{branch_name}' created.");
+                                        println!("Session '{name}' created.");
                                         std::thread::sleep(std::time::Duration::from_millis(500));
                                     }
 
@@ -800,7 +777,8 @@ pub async fn run() -> Result<()> {
                                         )
                                         .ok();
 
-                                        let _ = worktree::remove(&project_path, &worktree_path);
+                                        let _ =
+                                            worktree::remove(&project_path, &worktree_path, true);
 
                                         app.db.archive_session(
                                             project.project.id,
@@ -928,6 +906,7 @@ pub async fn run() -> Result<()> {
                                                     let _ = worktree::remove(
                                                         &project_path,
                                                         &worktree_path,
+                                                        false,
                                                     );
 
                                                     app.db.archive_session(
@@ -1020,7 +999,7 @@ pub async fn run() -> Result<()> {
                                                 bank::delete_metadata(&project_name, &item_name)?;
 
                                                 println!("Creating worktree...");
-                                                let (worktree_path, branch_name) =
+                                                let (worktree_path, session_id) =
                                                     worktree::create_from_existing(
                                                         &git_root, &item_name, &config,
                                                     )?;
@@ -1030,7 +1009,7 @@ pub async fn run() -> Result<()> {
                                                 println!("Starting {} session...", backend.name);
                                                 let tmux_session = app.session_manager.create(
                                                     &project_name,
-                                                    &branch_name,
+                                                    &session_id,
                                                     &worktree_path,
                                                     &config.setup,
                                                     &backend,
@@ -1038,14 +1017,14 @@ pub async fn run() -> Result<()> {
                                                 app.db.add_session(&NewSession {
                                                     project_id,
                                                     name: &display_name,
-                                                    branch_name: &branch_name,
+                                                    branch_name: &item_name,
                                                     worktree_path: &worktree_path,
                                                     tmux_session: &tmux_session,
                                                     backend: &backend.name,
                                                     note: restored_note.as_deref(),
                                                 })?;
 
-                                                println!("Session '{item_name}' restored.");
+                                                println!("Session '{display_name}' restored.");
                                                 std::thread::sleep(
                                                     std::time::Duration::from_millis(500),
                                                 );
@@ -1990,15 +1969,6 @@ fn prompt_template_selection(config: &ProjectConfig) -> Result<Option<String>> {
 
     println!("Unknown template '{selection}', continuing without template.");
     Ok(None)
-}
-
-fn apply_template_prefix(name: &str, prefix: Option<&str>) -> String {
-    match prefix {
-        Some(prefix) if !prefix.is_empty() && !name.starts_with(prefix) => {
-            format!("{prefix}{name}")
-        }
-        _ => name.to_string(),
-    }
 }
 
 fn merge_setup(config: &ProjectConfig, template: Option<&TemplateConfig>) -> Vec<String> {

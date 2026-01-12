@@ -60,7 +60,11 @@ pub async fn run(skip_wizard: bool) -> Result<()> {
     // Symlink paths
     let symlink_options = [".claude", ".env.local", ".vscode", ".idea"];
     let symlink_defaults: Vec<usize> = vec![]; // No defaults selected
-    let symlink_indices = prompt_multi("Symlink paths to worktrees:", &symlink_options, &symlink_defaults)?;
+    let symlink_indices = prompt_multi(
+        "Symlink paths to worktrees:",
+        &symlink_options,
+        &symlink_defaults,
+    )?;
     let symlink_paths: Vec<String> = symlink_indices
         .iter()
         .map(|&i| symlink_options[i].to_string())

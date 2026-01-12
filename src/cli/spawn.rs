@@ -1,26 +1,11 @@
 use anyhow::{bail, Context, Result};
 use std::env;
-use std::process::Command;
 use std::time::Duration;
 
 use crate::config::{resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig};
 use crate::db::{Database, NewSession};
 use crate::session::SessionManager;
 use crate::worktree;
-
-fn branch_exists(git_root: &std::path::Path, branch_name: &str) -> bool {
-    Command::new("git")
-        .args([
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch_name}"),
-        ])
-        .current_dir(git_root)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
 
 pub async fn run(
     name: &str,
@@ -45,24 +30,20 @@ pub async fn run(
             config
                 .templates
                 .get(name)
-                .with_context(|| format!("Template '{name}' not found in .mycel.toml"))?,
+                .with_context(|| format!("Template '{name}' not found in config"))?,
         ),
         None => None,
     };
-    let full_name = apply_template_prefix(name, template.and_then(|t| t.branch_prefix.as_deref()));
-    let sanitized_name = worktree::sanitize_branch_name(&full_name);
 
-    if db.get_session_by_name(project.id, &full_name)?.is_some() {
-        bail!("Session '{full_name}' already exists in this project");
+    if db.get_session_by_name(project.id, name)?.is_some() {
+        bail!("Session '{name}' already exists in this project");
     }
 
-    let (worktree_path, branch_name) = if branch_exists(&git_root, &sanitized_name) {
-        println!("Using existing branch '{sanitized_name}'...");
-        worktree::create_from_existing(&git_root, &sanitized_name, &config)?
-    } else {
-        println!("Creating worktree '{sanitized_name}'...");
-        worktree::create(&git_root, &full_name, &config)?
-    };
+    println!("Creating worktree...");
+    let (worktree_path, session_id) = worktree::create(&git_root, &config)?;
+
+    // Get the branch name that was created
+    let branch_name = worktree::get_branch(&worktree_path)?;
 
     println!("Starting {} session...", backend.name);
     let setup = merge_setup(&config, template);
@@ -72,7 +53,7 @@ pub async fn run(
     let session_manager = SessionManager::new();
     let tmux_session = session_manager.create(
         &project.name,
-        &branch_name,
+        &session_id,
         &worktree_path,
         &setup,
         &backend,
@@ -80,7 +61,7 @@ pub async fn run(
 
     db.add_session(&NewSession {
         project_id: project.id,
-        name: &full_name,
+        name,
         branch_name: &branch_name,
         worktree_path: &worktree_path,
         tmux_session: &tmux_session,
@@ -99,18 +80,9 @@ pub async fn run(
         }
     }
 
-    println!("\nSession '{branch_name}' created. Attach with: mycel attach {branch_name}");
+    println!("\nSession '{name}' created. Attach with: mycel attach {name}");
 
     Ok(())
-}
-
-fn apply_template_prefix(name: &str, prefix: Option<&str>) -> String {
-    match prefix {
-        Some(prefix) if !prefix.is_empty() && !name.starts_with(prefix) => {
-            format!("{prefix}{name}")
-        }
-        _ => name.to_string(),
-    }
 }
 
 fn merge_setup(config: &ProjectConfig, template: Option<&TemplateConfig>) -> Vec<String> {

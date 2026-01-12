@@ -1,8 +1,18 @@
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::ProjectConfig;
+
+/// Generate a unique session ID based on timestamp
+fn generate_session_id() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("s-{timestamp}")
+}
 
 /// Find the git repository root from a given path
 pub fn find_git_root(from: &Path) -> Result<PathBuf> {
@@ -21,24 +31,11 @@ pub fn find_git_root(from: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(path))
 }
 
-/// Sanitize a name to be a valid git branch name
-pub fn sanitize_branch_name(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            ' ' | '\t' | '~' | '^' | ':' | '?' | '*' | '[' | '\\' => '-',
-            c => c,
-        })
-        .collect::<String>()
-        .replace("..", "-")
-        .replace("@{", "-")
-        .trim_matches(|c| c == '.' || c == '/' || c == '-')
-        .to_string()
-}
-
-/// Create a new git worktree. Returns (worktree_path, sanitized_branch_name)
-pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<(PathBuf, String)> {
-    // Sanitize name for git branch
-    let branch_name = sanitize_branch_name(name);
+/// Create a new git worktree. Returns (worktree_path, session_id)
+/// The worktree starts on a temp branch that can be renamed later.
+pub fn create(git_root: &Path, config: &ProjectConfig) -> Result<(PathBuf, String)> {
+    let session_id = generate_session_id();
+    let temp_branch = format!("mycel/{session_id}");
 
     // Resolve worktree directory
     let worktree_base = if config.worktree_dir.starts_with('/') {
@@ -53,20 +50,20 @@ pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<(Pa
         .and_then(|n| n.to_str())
         .unwrap_or("project");
 
-    let worktree_path = worktree_base.join(project_name).join(&branch_name);
+    let worktree_path = worktree_base.join(project_name).join(&session_id);
 
     // Ensure parent directory exists
     if let Some(parent) = worktree_path.parent() {
         std::fs::create_dir_all(parent).context("Failed to create worktree directory")?;
     }
 
-    // Create the worktree
+    // Create the worktree with a temp branch
     let status = Command::new("git")
         .args([
             "worktree",
             "add",
             "-b",
-            &branch_name,
+            &temp_branch,
             &worktree_path.to_string_lossy(),
             &config.base_branch,
         ])
@@ -82,15 +79,18 @@ pub fn create(git_root: &Path, name: &str, config: &ProjectConfig) -> Result<(Pa
         create_symlinks(git_root, &worktree_path, &config.symlink_paths);
     }
 
-    Ok((worktree_path, branch_name))
+    Ok((worktree_path, session_id))
 }
 
 /// Create a worktree from an existing branch (for unbanking)
+/// Returns (worktree_path, session_id)
 pub fn create_from_existing(
     git_root: &Path,
     branch_name: &str,
     config: &ProjectConfig,
 ) -> Result<(PathBuf, String)> {
+    let session_id = generate_session_id();
+
     // Resolve worktree directory
     let worktree_base = if config.worktree_dir.starts_with('/') {
         PathBuf::from(&config.worktree_dir)
@@ -103,7 +103,7 @@ pub fn create_from_existing(
         .and_then(|n| n.to_str())
         .unwrap_or("project");
 
-    let worktree_path = worktree_base.join(project_name).join(branch_name);
+    let worktree_path = worktree_base.join(project_name).join(&session_id);
 
     if let Some(parent) = worktree_path.parent() {
         std::fs::create_dir_all(parent).context("Failed to create worktree directory")?;
@@ -129,11 +129,33 @@ pub fn create_from_existing(
         create_symlinks(git_root, &worktree_path, &config.symlink_paths);
     }
 
-    Ok((worktree_path, branch_name.to_string()))
+    Ok((worktree_path, session_id))
 }
 
-/// Remove a git worktree
-pub fn remove(git_root: &Path, worktree_path: &Path) -> Result<()> {
+/// Get the current branch name for a worktree
+pub fn get_branch(worktree_path: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(worktree_path)
+        .output()
+        .context("Failed to get branch name")?;
+
+    if !output.status.success() {
+        bail!("git rev-parse failed");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Remove a git worktree and optionally delete its branch
+pub fn remove(git_root: &Path, worktree_path: &Path, delete_branch: bool) -> Result<()> {
+    // Get the branch name before removing the worktree
+    let branch_name = if delete_branch {
+        get_branch(worktree_path).ok()
+    } else {
+        None
+    };
+
     // Remove the worktree
     let status = Command::new("git")
         .args([
@@ -150,16 +172,11 @@ pub fn remove(git_root: &Path, worktree_path: &Path) -> Result<()> {
         bail!("git worktree remove failed");
     }
 
-    // Also delete the branch
-    let branch_name = worktree_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-
-    if !branch_name.is_empty() {
-        // Ignore errors here - branch might not exist
+    // Delete the branch if requested
+    if let Some(branch) = branch_name {
+        // Ignore errors - branch might not exist or might be protected
         let _ = Command::new("git")
-            .args(["branch", "-D", branch_name])
+            .args(["branch", "-D", &branch])
             .current_dir(git_root)
             .status();
     }
