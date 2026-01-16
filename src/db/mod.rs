@@ -368,4 +368,13 @@ impl Database {
 
         Ok(())
     }
+
+    pub fn update_session_name(&self, session_id: i64, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET name = ?1 WHERE id = ?2",
+            params![name, session_id],
+        )?;
+
+        Ok(())
+    }
 }

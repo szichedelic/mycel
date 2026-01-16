@@ -696,6 +696,59 @@ pub async fn run() -> Result<()> {
                                     app.refresh()?;
                                 }
                             }
+                            KeyCode::Char('m') => {
+                                if let Some(SelectedItem::Session(project, session)) =
+                                    app.get_selected_item()
+                                {
+                                    let session_id = session.session.id;
+                                    let session_name = session.session.name.clone();
+                                    let project_id = project.project.id;
+
+                                    disable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        LeaveAlternateScreen,
+                                        DisableMouseCapture
+                                    )?;
+
+                                    println!("Rename session '{session_name}' (blank to cancel):");
+                                    print!("New name: ");
+                                    io::stdout().flush()?;
+                                    let mut name = String::new();
+                                    io::stdin().read_line(&mut name)?;
+                                    let name = name.trim();
+
+                                    if name.is_empty() {
+                                        println!("Cancelled.");
+                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                    } else if name == session_name {
+                                        println!("Name unchanged.");
+                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                    } else if app
+                                        .db
+                                        .get_session_by_name(project_id, name)?
+                                        .is_some()
+                                    {
+                                        println!(
+                                            "Error: Session '{name}' already exists in this project."
+                                        );
+                                        std::thread::sleep(std::time::Duration::from_millis(1200));
+                                    } else {
+                                        app.db.update_session_name(session_id, name)?;
+                                        println!("Renamed to '{name}'.");
+                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                    }
+
+                                    enable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        EnterAlternateScreen,
+                                        EnableMouseCapture
+                                    )?;
+                                    terminal.clear()?;
+                                    app.refresh()?;
+                                }
+                            }
                             KeyCode::Char('p') => {
                                 if let Some(SelectedItem::Session(_, session)) =
                                     app.get_selected_item()
@@ -1693,7 +1746,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     let mut footer_text = if app.history_mode {
         " [h] sessions  [r]efresh  [/] search  [q]uit".to_string()
     } else {
-        " [a]ttach  [s]pawn  [n]ote  [p]ause  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [r]efresh  [/] search  [q]uit"
+        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [r]efresh  [/] search  [q]uit"
             .to_string()
     };
     if app.search_mode || !app.search_query.is_empty() {

@@ -9,6 +9,7 @@ pub mod kill;
 pub mod list;
 pub mod notify;
 pub mod projects;
+pub mod rename;
 pub mod spawn;
 pub mod stop;
 pub mod unbank;

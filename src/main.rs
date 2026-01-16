@@ -24,7 +24,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Register current directory as a project
+    /// Register or reconfigure current directory as a project
     Init {
         /// Skip interactive setup wizard
         #[arg(long)]
@@ -123,6 +123,13 @@ enum Commands {
         #[arg(short, long, default_value_t = 5)]
         interval: u64,
     },
+    /// Rename a session
+    Rename {
+        /// Current session name
+        from: String,
+        /// New session name
+        to: String,
+    },
     /// Serve the TUI over a local web server
     Web {
         /// Host to bind (use 0.0.0.0 to reach from your phone)
@@ -186,6 +193,7 @@ async fn main() -> Result<()> {
             cli::bank_import::run(&path, name.as_deref(), force).await
         }
         Some(Commands::Notify { interval }) => cli::notify::run(interval).await,
+        Some(Commands::Rename { from, to }) => cli::rename::run(&from, &to).await,
         Some(Commands::Web {
             host,
             port,
