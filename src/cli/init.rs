@@ -40,17 +40,38 @@ pub async fn run(skip_wizard: bool) -> Result<()> {
 
     println!("\n  Welcome to mycel setup wizard\n");
 
+    let mut config = if config_exists {
+        ProjectConfig::load(&git_root)?
+    } else {
+        ProjectConfig::default()
+    };
+
     // Base branch
-    let base_branch = prompt_string("Base branch", "main")?;
+    let base_branch = prompt_string("Base branch", &config.base_branch)?;
 
     // Worktree directory
-    let worktree_dir = prompt_string("Worktree directory", "../.mycel-worktrees")?;
+    let worktree_dir = prompt_string("Worktree directory", &config.worktree_dir)?;
 
     // Backend
     let backend_options = ["claude", "codex", "other"];
-    let backend_idx = prompt_select("Default backend:", &backend_options, 0)?;
+    let backend_default = match config.backend.as_deref() {
+        Some("codex") => 1,
+        Some("claude") | None => 0,
+        Some(_) => 2,
+    };
+    let backend_idx = prompt_select("Default backend:", &backend_options, backend_default)?;
     let backend = if backend_idx == 2 {
-        Some(prompt_string("Backend name", "")?)
+        let default_backend = config
+            .backend
+            .as_deref()
+            .filter(|name| *name != "claude" && *name != "codex")
+            .unwrap_or("");
+        let backend_name = prompt_string("Backend name", default_backend)?;
+        if backend_name.is_empty() {
+            None
+        } else {
+            Some(backend_name)
+        }
     } else if backend_idx == 0 {
         None // claude is the default, no need to set explicitly
     } else {
@@ -59,38 +80,61 @@ pub async fn run(skip_wizard: bool) -> Result<()> {
 
     // Symlink paths
     let symlink_options = [".claude", ".env.local", ".vscode", ".idea"];
-    let symlink_defaults: Vec<usize> = vec![]; // No defaults selected
+    let symlink_defaults: Vec<usize> = symlink_options
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, option)| {
+            if config.symlink_paths.iter().any(|path| path == option) {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+        .collect();
     let symlink_indices = prompt_multi(
         "Symlink paths to worktrees:",
         &symlink_options,
         &symlink_defaults,
     )?;
-    let symlink_paths: Vec<String> = symlink_indices
-        .iter()
-        .map(|&i| symlink_options[i].to_string())
-        .collect();
+    let mut symlink_paths: Vec<String> = Vec::new();
+    for idx in symlink_indices {
+        let path = symlink_options[idx].to_string();
+        if !symlink_paths.contains(&path) {
+            symlink_paths.push(path);
+        }
+    }
+    for path in &config.symlink_paths {
+        if !symlink_options.iter().any(|option| option == path)
+            && !symlink_paths.contains(path)
+        {
+            symlink_paths.push(path.clone());
+        }
+    }
 
-    // Config location
-    let location_options = [
-        &format!("External (~/.config/mycel/projects/{name}.toml)"),
-        "In-repo (.mycel.toml)",
-    ];
-    let location_idx = prompt_select("Save config to:", &location_options, 0)?;
-
-    // Build config
-    let config = ProjectConfig {
-        base_branch,
-        worktree_dir,
-        backend,
-        symlink_paths,
-        ..Default::default()
-    };
+    config.base_branch = base_branch;
+    config.worktree_dir = worktree_dir;
+    config.backend = backend;
+    config.symlink_paths = symlink_paths;
 
     // Save config
-    let config_path = if location_idx == 0 {
-        get_external_config_path(&name).context("Could not determine config path")?
+    let external_config_path =
+        get_external_config_path(&name).context("Could not determine config path")?;
+    let repo_config_path = git_root.join(".mycel.toml");
+    let config_path = if external_config_path.exists() {
+        external_config_path.clone()
+    } else if repo_config_path.exists() {
+        repo_config_path.clone()
     } else {
-        git_root.join(".mycel.toml")
+        let location_options = [
+            &format!("External (~/.config/mycel/projects/{name}.toml)"),
+            "In-repo (.mycel.toml)",
+        ];
+        let location_idx = prompt_select("Save config to:", &location_options, 0)?;
+        if location_idx == 0 {
+            external_config_path
+        } else {
+            repo_config_path
+        }
     };
 
     config.save(&config_path)?;
