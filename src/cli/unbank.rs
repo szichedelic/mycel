@@ -56,8 +56,7 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
         let backend = resolve_backend(&global_config, &config, None)?;
 
         println!("Creating worktree...");
-        let (worktree_path, session_id) =
-            worktree::create_from_existing(&git_root, name, &config)?;
+        let (worktree_path, session_id) = worktree::create_from_existing(&git_root, name, &config)?;
 
         println!("Starting {} session...", backend.name);
         let session_manager = SessionManager::new();

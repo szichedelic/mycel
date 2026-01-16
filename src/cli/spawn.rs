@@ -51,13 +51,8 @@ pub async fn run(
         println!("Setup: {}", setup.join(" && "));
     }
     let session_manager = SessionManager::new();
-    let tmux_session = session_manager.create(
-        &project.name,
-        &session_id,
-        &worktree_path,
-        &setup,
-        &backend,
-    )?;
+    let tmux_session =
+        session_manager.create(&project.name, &session_id, &worktree_path, &setup, &backend)?;
 
     db.add_session(&NewSession {
         project_id: project.id,
