@@ -45,6 +45,9 @@ enum Commands {
         /// Optional backend override (e.g. claude, codex)
         #[arg(short, long)]
         backend: Option<String>,
+        /// Wrap backend with Happy for mobile access
+        #[arg(long)]
+        happy: bool,
     },
     /// Attach to an existing session
     Attach {
@@ -165,12 +168,14 @@ async fn main() -> Result<()> {
             note,
             template,
             backend,
+            happy,
         }) => {
             cli::spawn::run(
                 &name,
                 note.as_deref(),
                 template.as_deref(),
                 backend.as_deref(),
+                happy,
             )
             .await
         }

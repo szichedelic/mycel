@@ -12,6 +12,7 @@ pub async fn run(
     note: Option<&str>,
     template_name: Option<&str>,
     backend_override: Option<&str>,
+    happy: bool,
 ) -> Result<()> {
     let current_dir = env::current_dir().context("Failed to get current directory")?;
     let git_root = worktree::find_git_root(&current_dir)?;
@@ -24,7 +25,11 @@ pub async fn run(
 
     let config = ProjectConfig::load(&git_root)?;
     let global_config = GlobalConfig::load()?;
-    let backend = resolve_backend(&global_config, &config, backend_override)?;
+    let mut backend = resolve_backend(&global_config, &config, backend_override)?;
+
+    if happy {
+        apply_happy_wrapper(&mut backend)?;
+    }
     let template = match template_name {
         Some(name) => Some(
             config
@@ -86,4 +91,31 @@ fn merge_setup(config: &ProjectConfig, template: Option<&TemplateConfig>) -> Vec
         setup.extend(template.setup.clone());
     }
     setup
+}
+
+use crate::config::ResolvedBackend;
+
+fn apply_happy_wrapper(backend: &mut ResolvedBackend) -> Result<()> {
+    if !is_happy_available() {
+        bail!(
+            "Happy CLI not found. Install with: npm install -g happy-coder\n\
+             Learn more: https://github.com/slopus/happy-cli"
+        );
+    }
+
+    let original_command = std::mem::replace(&mut backend.command, "happy".to_string());
+    let original_args = std::mem::take(&mut backend.args);
+
+    backend.args = vec![original_command];
+    backend.args.extend(original_args);
+
+    Ok(())
+}
+
+fn is_happy_available() -> bool {
+    std::process::Command::new("which")
+        .arg("happy")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
