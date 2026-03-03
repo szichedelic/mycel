@@ -8,6 +8,7 @@ mod config;
 mod confirm;
 mod db;
 mod disk;
+mod happy;
 mod notify;
 mod session;
 mod tui;

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::config::{resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig};
 use crate::db::{Database, NewSession};
+use crate::happy::apply_happy_wrapper;
 use crate::session::SessionManager;
 use crate::worktree;
 
@@ -47,7 +48,6 @@ pub async fn run(
     println!("Creating worktree...");
     let (worktree_path, session_id) = worktree::create(&git_root, &config)?;
 
-    // Get the branch name that was created
     let branch_name = worktree::get_branch(&worktree_path)?;
 
     println!("Starting {} session...", backend.name);
@@ -91,31 +91,4 @@ fn merge_setup(config: &ProjectConfig, template: Option<&TemplateConfig>) -> Vec
         setup.extend(template.setup.clone());
     }
     setup
-}
-
-use crate::config::ResolvedBackend;
-
-fn apply_happy_wrapper(backend: &mut ResolvedBackend) -> Result<()> {
-    if !is_happy_available() {
-        bail!(
-            "Happy CLI not found. Install with: npm install -g happy-coder\n\
-             Learn more: https://github.com/slopus/happy-cli"
-        );
-    }
-
-    let original_command = std::mem::replace(&mut backend.command, "happy".to_string());
-    let original_args = std::mem::take(&mut backend.args);
-
-    backend.args = vec![original_command];
-    backend.args.extend(original_args);
-
-    Ok(())
-}
-
-fn is_happy_available() -> bool {
-    std::process::Command::new("which")
-        .arg("happy")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
