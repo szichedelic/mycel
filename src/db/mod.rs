@@ -51,7 +51,6 @@ impl Database {
             .join("mycel")
             .join("mycel.db");
 
-        // Ensure directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -373,6 +372,15 @@ impl Database {
         self.conn.execute(
             "UPDATE sessions SET name = ?1 WHERE id = ?2",
             params![name, session_id],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn update_session_tmux(&self, session_id: i64, tmux_session: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET tmux_session = ?1 WHERE id = ?2",
+            params![tmux_session, session_id],
         )?;
 
         Ok(())

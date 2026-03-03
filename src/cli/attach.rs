@@ -22,21 +22,32 @@ pub async fn run(name: &str) -> Result<()> {
 
     let session_manager = SessionManager::new();
 
-    if !session_manager.is_alive(&session.tmux_session)? {
+    let tmux_session = if !session_manager.is_alive(&session.tmux_session)? {
         println!("Session '{name}' is not running. Restarting...");
+        let _ = session_manager.kill(&session.tmux_session);
         let config = ProjectConfig::load(&git_root)?;
         let global_config = GlobalConfig::load()?;
         let backend = resolve_backend(&global_config, &config, Some(&session.backend))?;
-        session_manager.create(
+        let new_tmux = session_manager.create(
             &project.name,
             name,
             &session.worktree_path,
             &config.setup,
             &backend,
         )?;
+        if new_tmux != session.tmux_session {
+            db.update_session_tmux(session.id, &new_tmux)?;
+        }
+        new_tmux
+    } else {
+        session.tmux_session.clone()
+    };
+
+    if let Err(err) = session_manager.set_session_label(&tmux_session, &project.name, name) {
+        eprintln!("Warning: failed to set session label: {err}");
     }
 
-    session_manager.attach(&session.tmux_session)?;
+    session_manager.attach(&tmux_session)?;
 
     Ok(())
 }
