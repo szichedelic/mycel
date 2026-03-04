@@ -104,9 +104,7 @@ pub async fn run(skip_wizard: bool) -> Result<()> {
         }
     }
     for path in &config.symlink_paths {
-        if !symlink_options.iter().any(|option| option == path)
-            && !symlink_paths.contains(path)
-        {
+        if !symlink_options.iter().any(|option| option == path) && !symlink_paths.contains(path) {
             symlink_paths.push(path.clone());
         }
     }
