@@ -28,6 +28,7 @@ use crate::config::{
 use crate::confirm;
 use crate::db::{Database, NewSession, Project, Session, SessionHistory};
 use crate::disk;
+use crate::happy::{apply_happy_wrapper, is_happy_available};
 use crate::session::SessionManager;
 use crate::worktree;
 
@@ -192,11 +193,12 @@ impl App {
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ) -> Result<()> {
-        let (project_name, project_path, session_name, tmux_session, worktree_path, backend_name) =
+        let (project_name, project_path, session_id, session_name, tmux_session, worktree_path, backend_name) =
             match self.get_selected_item() {
                 Some(SelectedItem::Session(project, session)) => (
                     project.project.name.clone(),
                     project.project.path.clone(),
+                    session.session.id,
                     session.session.name.clone(),
                     session.session.tmux_session.clone(),
                     session.session.worktree_path.clone(),
@@ -205,7 +207,6 @@ impl App {
                 _ => return Ok(()),
             };
 
-        // Restore terminal before attaching
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
@@ -213,23 +214,36 @@ impl App {
             DisableMouseCapture
         )?;
 
-        if !self.session_manager.is_alive(&tmux_session)? {
+        let tmux_session = if !self.session_manager.is_alive(&tmux_session)? {
             println!("Session '{session_name}' is not running. Restarting...");
+            let _ = self.session_manager.kill(&tmux_session);
             let config = ProjectConfig::load(&project_path)?;
             let global_config = GlobalConfig::load()?;
             let backend = resolve_backend(&global_config, &config, Some(&backend_name))?;
-            self.session_manager.create(
+            let new_tmux = self.session_manager.create(
                 &project_name,
                 &session_name,
                 &worktree_path,
                 &config.setup,
                 &backend,
             )?;
+            if new_tmux != tmux_session {
+                let _ = self.db.update_session_tmux(session_id, &new_tmux);
+            }
+            new_tmux
+        } else {
+            tmux_session
+        };
+
+        if let Err(err) = self
+            .session_manager
+            .set_session_label(&tmux_session, &project_name, &session_name)
+        {
+            println!("Warning: failed to set session label: {err}");
         }
 
         self.session_manager.attach(&tmux_session)?;
 
-        // Restore TUI after detaching
         enable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
@@ -563,7 +577,7 @@ pub async fn run() -> Result<()> {
                                     let config = ProjectConfig::load(&project.path)?;
                                     let global_config = GlobalConfig::load()?;
                                     let template_name = prompt_template_selection(&config)?;
-                                    let backend_override =
+                                    let (backend_override, use_happy) =
                                         prompt_backend_selection(&global_config, &config)?;
 
                                     print!("Session name: ");
@@ -594,11 +608,14 @@ pub async fn run() -> Result<()> {
 
                                         let branch_name = worktree::get_branch(&worktree_path)?;
 
-                                        let backend = resolve_backend(
+                                        let mut backend = resolve_backend(
                                             &global_config,
                                             &config,
                                             backend_override.as_deref(),
                                         )?;
+                                        if use_happy {
+                                            apply_happy_wrapper(&mut backend)?;
+                                        }
                                         println!("Starting {} session...", backend.name);
                                         let setup = merge_setup(&config, template);
                                         if !setup.is_empty() {
@@ -1301,7 +1318,6 @@ pub async fn run() -> Result<()> {
         }
     }
 
-    // Restore terminal
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -1922,10 +1938,10 @@ fn format_note_excerpt(note: &str, max_len: usize) -> String {
 fn prompt_backend_selection(
     global: &GlobalConfig,
     config: &ProjectConfig,
-) -> Result<Option<String>> {
+) -> Result<(Option<String>, bool)> {
     let backends = available_backend_names(global, config);
     if backends.is_empty() {
-        return Ok(None);
+        return Ok((None, false));
     }
 
     let default_backend = config
@@ -1934,6 +1950,7 @@ fn prompt_backend_selection(
         .or(global.backend.as_deref())
         .unwrap_or("claude");
 
+    let happy_available = is_happy_available();
     println!("Backends:");
     for (idx, name) in backends.iter().enumerate() {
         let suffix = if name == default_backend {
@@ -1943,6 +1960,12 @@ fn prompt_backend_selection(
         };
         println!("  {}. {}{}", idx + 1, name, suffix);
     }
+    let happy_index = backends.len() + 1;
+    let happy_suffix = if happy_available { "" } else { " (not installed)" };
+    println!(
+        "  {}. happy (wrap default: {}){}",
+        happy_index, default_backend, happy_suffix
+    );
 
     print!("Backend (enter for default: {default_backend}): ");
     io::stdout().flush()?;
@@ -1951,21 +1974,36 @@ fn prompt_backend_selection(
     let selection = selection.trim();
 
     if selection.is_empty() {
-        return Ok(None);
+        return Ok((None, false));
     }
 
     if let Ok(index) = selection.parse::<usize>() {
         if index >= 1 && index <= backends.len() {
-            return Ok(Some(backends[index - 1].clone()));
+            return Ok((Some(backends[index - 1].clone()), false));
+        }
+        if index == happy_index {
+            if !happy_available {
+                println!("Happy CLI not found. Install with: npm install -g happy-coder");
+                return Ok((None, false));
+            }
+            return Ok((None, true));
         }
     }
 
+    if selection == "happy" {
+        if !happy_available {
+            println!("Happy CLI not found. Install with: npm install -g happy-coder");
+            return Ok((None, false));
+        }
+        return Ok((None, true));
+    }
+
     if backends.iter().any(|name| name == selection) {
-        return Ok(Some(selection.to_string()));
+        return Ok((Some(selection.to_string()), false));
     }
 
     println!("Unknown backend '{selection}', using default.");
-    Ok(None)
+    Ok((None, false))
 }
 
 fn prompt_template_selection(config: &ProjectConfig) -> Result<Option<String>> {
