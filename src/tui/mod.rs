@@ -17,8 +17,11 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame, Terminal,
 };
+use std::collections::HashMap;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::Command;
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::bank::{self, BankedItem};
@@ -55,6 +58,7 @@ struct App {
     preview_session_id: Option<i64>,
     last_click: Option<ClickState>,
     history_mode: bool,
+    disk_rx: Option<mpsc::Receiver<HashMap<i64, Option<u64>>>>,
 }
 
 struct ProjectWithSessions {
@@ -102,6 +106,7 @@ impl App {
             preview_session_id: None,
             last_click: None,
             history_mode: false,
+            disk_rx: None,
         };
 
         app.refresh()?;
@@ -111,8 +116,8 @@ impl App {
     fn refresh(&mut self) -> Result<()> {
         let projects = self.db.list_projects()?;
         let mut refreshed_projects = Vec::new();
-        let mut total_worktree_bytes: u64 = 0;
-        let mut disk_usages = Vec::new();
+
+        let mut sizing_tasks: Vec<(i64, PathBuf)> = Vec::new();
 
         for project in projects {
             let sessions = self.db.list_sessions(project.id).unwrap_or_default();
@@ -123,22 +128,13 @@ impl App {
                     .session_manager
                     .is_alive(&session.tmux_session)
                     .unwrap_or(false);
-                let worktree_bytes = disk::dir_size_bytes(&session.worktree_path);
 
-                if let Some(size) = worktree_bytes {
-                    total_worktree_bytes = total_worktree_bytes.saturating_add(size);
-                }
-
-                if worktree_bytes.is_some() {
-                    if let Some(usage) = disk::filesystem_usage(&session.worktree_path) {
-                        disk_usages.push(usage);
-                    }
-                }
+                sizing_tasks.push((session.id, session.worktree_path.clone()));
 
                 sessions_with_status.push(SessionWithStatus {
                     session,
                     is_running,
-                    worktree_bytes,
+                    worktree_bytes: None,
                 });
             }
 
@@ -149,17 +145,27 @@ impl App {
             });
         }
 
-        if disk_usages.is_empty() {
-            for project in &refreshed_projects {
-                if let Some(usage) = disk::filesystem_usage(&project.project.path) {
-                    disk_usages.push(usage);
-                }
+        self.projects = refreshed_projects;
+        self.total_worktree_bytes = 0;
+        self.disk_usage = None;
+
+        // Compute filesystem usage from any project path (cheap statvfs call)
+        for project in &self.projects {
+            if let Some(usage) = disk::filesystem_usage(&project.project.path) {
+                self.disk_usage = Some(usage);
+                break;
             }
         }
 
-        self.projects = refreshed_projects;
-        self.total_worktree_bytes = total_worktree_bytes;
-        self.disk_usage = lowest_disk_usage(&disk_usages);
+        let (tx, rx) = mpsc::channel();
+        self.disk_rx = Some(rx);
+        std::thread::spawn(move || {
+            let mut results = HashMap::new();
+            for (session_id, path) in sizing_tasks {
+                results.insert(session_id, disk::dir_size_bytes(&path));
+            }
+            let _ = tx.send(results);
+        });
 
         let mut history_entries = Vec::new();
         for project in &self.projects {
@@ -187,6 +193,25 @@ impl App {
         self.clamp_selection();
         self.update_preview(true);
         Ok(())
+    }
+
+    fn poll_disk_sizes(&mut self) {
+        let sizes = match self.disk_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(sizes) => sizes,
+            None => return,
+        };
+        self.disk_rx = None;
+
+        let mut total: u64 = 0;
+        for project in &mut self.projects {
+            for s in &mut project.sessions {
+                if let Some(bytes) = sizes.get(&s.session.id).copied().flatten() {
+                    s.worktree_bytes = Some(bytes);
+                    total = total.saturating_add(bytes);
+                }
+            }
+        }
+        self.total_worktree_bytes = total;
     }
 
     fn attach_selected_session(
@@ -487,6 +512,7 @@ pub async fn run() -> Result<()> {
     app.show_logo = false;
 
     loop {
+        app.poll_disk_sizes();
         terminal.draw(|f| draw_ui(f, &app))?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
@@ -2117,14 +2143,4 @@ fn is_low_disk(usage: disk::DiskUsage) -> bool {
     usage.available_bytes < LOW_DISK_FREE_BYTES || free_ratio < LOW_DISK_FREE_RATIO
 }
 
-fn lowest_disk_usage(usages: &[disk::DiskUsage]) -> Option<disk::DiskUsage> {
-    usages
-        .iter()
-        .copied()
-        .filter(|usage| usage.total_bytes > 0)
-        .min_by(|a, b| {
-            let left = (a.available_bytes as u128).saturating_mul(b.total_bytes as u128);
-            let right = (b.available_bytes as u128).saturating_mul(a.total_bytes as u128);
-            left.cmp(&right)
-        })
-}
+
