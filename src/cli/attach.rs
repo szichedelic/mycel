@@ -20,7 +20,7 @@ pub async fn run(name: &str) -> Result<()> {
         .get_session_by_name(project.id, name)?
         .context(format!("Session '{name}' not found"))?;
 
-    let session_manager = SessionManager::new();
+    let session_manager = SessionManager::for_kind_str(&session.runtime_kind);
 
     let tmux_session = if !session_manager.is_alive(&session.tmux_session)? {
         println!("Session '{name}' is not running. Restarting...");

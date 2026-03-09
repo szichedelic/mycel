@@ -34,9 +34,8 @@ pub async fn run(name: &str, remove_worktree: bool, force: bool) -> Result<()> {
         }
     }
 
-    let session_manager = SessionManager::new();
+    let session_manager = SessionManager::for_kind_str(&session.runtime_kind);
 
-    // Kill tmux session if running
     if session_manager.is_alive(&session.tmux_session)? {
         println!("Stopping session '{name}'...");
         session_manager.kill(&session.tmux_session)?;

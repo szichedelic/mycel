@@ -15,7 +15,6 @@ use super::runtime::{RuntimeKind, RuntimeProvider, RuntimeSession};
 /// for all subsequent lifecycle operations.
 pub struct ComposeProvider;
 
-#[allow(dead_code)]
 impl ComposeProvider {
     pub fn new() -> Self {
         Self

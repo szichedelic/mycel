@@ -7,7 +7,6 @@ pub mod compose;
 pub mod runtime;
 pub mod tmux;
 
-#[allow(unused_imports)]
 pub use compose::ComposeProvider;
 pub use runtime::{RuntimeKind, RuntimeProvider};
 pub use tmux::TmuxProvider;
@@ -21,6 +20,22 @@ impl SessionManager {
         Self {
             provider: Box::new(TmuxProvider::new()),
         }
+    }
+
+    /// Create a SessionManager with the correct provider for a stored runtime kind.
+    pub fn for_kind(kind: RuntimeKind) -> Self {
+        let provider: Box<dyn RuntimeProvider> = match kind {
+            RuntimeKind::Tmux => Box::new(TmuxProvider::new()),
+            RuntimeKind::Compose => Box::new(ComposeProvider::new()),
+        };
+        Self { provider }
+    }
+
+    /// Create a SessionManager from a runtime_kind string stored in the database.
+    /// Falls back to tmux if the string is unrecognised.
+    pub fn for_kind_str(kind_str: &str) -> Self {
+        let kind = RuntimeKind::from_str(kind_str).unwrap_or(RuntimeKind::Tmux);
+        Self::for_kind(kind)
     }
 
     #[allow(dead_code)]
@@ -73,5 +88,31 @@ impl SessionManager {
         session_name: &str,
     ) -> Result<()> {
         self.provider.set_label(runtime_id, project_name, session_name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn for_kind_returns_correct_provider() {
+        let sm = SessionManager::for_kind(RuntimeKind::Tmux);
+        assert_eq!(sm.kind(), RuntimeKind::Tmux);
+
+        let sm = SessionManager::for_kind(RuntimeKind::Compose);
+        assert_eq!(sm.kind(), RuntimeKind::Compose);
+    }
+
+    #[test]
+    fn for_kind_str_parses_known_kinds() {
+        assert_eq!(SessionManager::for_kind_str("tmux").kind(), RuntimeKind::Tmux);
+        assert_eq!(SessionManager::for_kind_str("compose").kind(), RuntimeKind::Compose);
+    }
+
+    #[test]
+    fn for_kind_str_falls_back_to_tmux() {
+        assert_eq!(SessionManager::for_kind_str("unknown").kind(), RuntimeKind::Tmux);
+        assert_eq!(SessionManager::for_kind_str("").kind(), RuntimeKind::Tmux);
     }
 }

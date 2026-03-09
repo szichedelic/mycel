@@ -22,19 +22,19 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
-    let session_manager = SessionManager::new();
-
     println!("Sessions in {}:\n", project.name);
-    for session in sessions {
-        let status = if session_manager.is_alive(&session.tmux_session)? {
+    for session in &sessions {
+        let sm = SessionManager::for_kind_str(&session.runtime_kind);
+        let status = if sm.is_alive(&session.tmux_session)? {
             "running"
         } else {
             "stopped"
         };
         println!(
-            "  {} [{}] ({}) - {}",
+            "  {} [{}] ({}/{}) - {}",
             session.name,
             status,
+            session.runtime_kind,
             session.backend,
             session.worktree_path.display()
         );

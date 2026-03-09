@@ -19,7 +19,6 @@ impl RuntimeKind {
         }
     }
 
-    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "tmux" => Some(RuntimeKind::Tmux),

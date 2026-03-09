@@ -28,7 +28,7 @@ pub async fn run(name: &str, force: bool) -> Result<()> {
         }
     }
 
-    let session_manager = SessionManager::new();
+    let session_manager = SessionManager::for_kind_str(&session.runtime_kind);
 
     if session_manager.is_alive(&session.tmux_session)? {
         println!("Stopping session '{name}'...");

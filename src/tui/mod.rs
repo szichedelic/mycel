@@ -124,10 +124,8 @@ impl App {
             let mut sessions_with_status = Vec::new();
 
             for session in sessions {
-                let is_running = self
-                    .session_manager
-                    .is_alive(&session.tmux_session)
-                    .unwrap_or(false);
+                let sm = SessionManager::for_kind_str(&session.runtime_kind);
+                let is_running = sm.is_alive(&session.tmux_session).unwrap_or(false);
 
                 sizing_tasks.push((session.id, session.worktree_path.clone()));
 
@@ -218,7 +216,7 @@ impl App {
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ) -> Result<()> {
-        let (project_name, project_path, session_id, session_name, tmux_session, worktree_path, backend_name) =
+        let (project_name, project_path, session_id, session_name, tmux_session, worktree_path, backend_name, runtime_kind) =
             match self.get_selected_item() {
                 Some(SelectedItem::Session(project, session)) => (
                     project.project.name.clone(),
@@ -228,6 +226,7 @@ impl App {
                     session.session.tmux_session.clone(),
                     session.session.worktree_path.clone(),
                     session.session.backend.clone(),
+                    session.session.runtime_kind.clone(),
                 ),
                 _ => return Ok(()),
             };
@@ -239,13 +238,14 @@ impl App {
             DisableMouseCapture
         )?;
 
-        let tmux_session = if !self.session_manager.is_alive(&tmux_session)? {
+        let sm = SessionManager::for_kind_str(&runtime_kind);
+        let tmux_session = if !sm.is_alive(&tmux_session)? {
             println!("Session '{session_name}' is not running. Restarting...");
-            let _ = self.session_manager.kill(&tmux_session);
+            let _ = sm.kill(&tmux_session);
             let config = ProjectConfig::load(&project_path)?;
             let global_config = GlobalConfig::load()?;
             let backend = resolve_backend(&global_config, &config, Some(&backend_name))?;
-            let new_tmux = self.session_manager.create(
+            let new_tmux = sm.create(
                 &project_name,
                 &session_name,
                 &worktree_path,
@@ -260,14 +260,11 @@ impl App {
             tmux_session
         };
 
-        if let Err(err) = self
-            .session_manager
-            .set_session_label(&tmux_session, &project_name, &session_name)
-        {
+        if let Err(err) = sm.set_session_label(&tmux_session, &project_name, &session_name) {
             println!("Warning: failed to set session label: {err}");
         }
 
-        self.session_manager.attach(&tmux_session)?;
+        sm.attach(&tmux_session)?;
 
         enable_raw_mode()?;
         execute!(
@@ -800,6 +797,7 @@ pub async fn run() -> Result<()> {
                                     let session_name = session.session.name.clone();
                                     let tmux_session = session.session.tmux_session.clone();
                                     let worktree_path = session.session.worktree_path.clone();
+                                    let runtime_kind = session.session.runtime_kind.clone();
 
                                     disable_raw_mode()?;
                                     execute!(
@@ -812,9 +810,10 @@ pub async fn run() -> Result<()> {
                                     let confirmed = confirm::prompt_confirm(&prompt)?;
 
                                     if confirmed {
-                                        if app.session_manager.is_alive(&tmux_session)? {
+                                        let sm = SessionManager::for_kind_str(&runtime_kind);
+                                        if sm.is_alive(&tmux_session)? {
                                             println!("Stopping session '{session_name}'...");
-                                            app.session_manager.kill(&tmux_session)?;
+                                            sm.kill(&tmux_session)?;
                                         } else {
                                             println!("Session '{session_name}' already stopped.");
                                         }
@@ -848,6 +847,7 @@ pub async fn run() -> Result<()> {
                                     let tmux_session = session.session.tmux_session.clone();
                                     let worktree_path = session.session.worktree_path.clone();
                                     let project_path = project.project.path.clone();
+                                    let runtime_kind = session.session.runtime_kind.clone();
 
                                     disable_raw_mode()?;
                                     execute!(
@@ -862,8 +862,9 @@ pub async fn run() -> Result<()> {
                                     let confirmed = confirm::prompt_confirm(&prompt)?;
 
                                     if confirmed {
-                                        if app.session_manager.is_alive(&tmux_session)? {
-                                            app.session_manager.kill(&tmux_session)?;
+                                        let sm = SessionManager::for_kind_str(&runtime_kind);
+                                        if sm.is_alive(&tmux_session)? {
+                                            sm.kill(&tmux_session)?;
                                         }
 
                                         let config = ProjectConfig::load(&project_path)?;
@@ -910,6 +911,7 @@ pub async fn run() -> Result<()> {
                                     let worktree_path = session.session.worktree_path.clone();
                                     let project_path = project.project.path.clone();
                                     let project_name = project.project.name.clone();
+                                    let runtime_kind = session.session.runtime_kind.clone();
 
                                     disable_raw_mode()?;
                                     execute!(
@@ -991,12 +993,10 @@ pub async fn run() -> Result<()> {
                                                         );
                                                     }
 
-                                                    if app
-                                                        .session_manager
-                                                        .is_alive(&tmux_session)?
-                                                    {
+                                                    let sm = SessionManager::for_kind_str(&runtime_kind);
+                                                    if sm.is_alive(&tmux_session)? {
                                                         println!("Stopping session...");
-                                                        app.session_manager.kill(&tmux_session)?;
+                                                        sm.kill(&tmux_session)?;
                                                     }
 
                                                     println!("Removing worktree...");
@@ -1603,8 +1603,13 @@ fn draw_ui(f: &mut Frame, app: &App) {
                     ),
                     Span::styled(format!("  {age}"), Style::default().fg(Color::DarkGray)),
                 ];
+                let runtime_label = if session.session.runtime_kind == "tmux" {
+                    format!("  [{}]", session.session.backend)
+                } else {
+                    format!("  [{}/{}]", session.session.runtime_kind, session.session.backend)
+                };
                 spans.push(Span::styled(
-                    format!("  [{}]", session.session.backend),
+                    runtime_label,
                     Style::default().fg(Color::Blue),
                 ));
 
