@@ -660,6 +660,7 @@ pub async fn run() -> Result<()> {
                                             branch_name: &branch_name,
                                             worktree_path: &worktree_path,
                                             tmux_session: &tmux_session,
+                                            runtime_kind: app.session_manager.kind().as_str(),
                                             backend: &backend.name,
                                             note: note.as_deref(),
                                         })?;
@@ -1116,6 +1117,7 @@ pub async fn run() -> Result<()> {
                                                     branch_name: &item_name,
                                                     worktree_path: &worktree_path,
                                                     tmux_session: &tmux_session,
+                                                    runtime_kind: app.session_manager.kind().as_str(),
                                                     backend: &backend.name,
                                                     note: restored_note.as_deref(),
                                                 })?;
@@ -1988,10 +1990,7 @@ fn prompt_backend_selection(
     }
     let happy_index = backends.len() + 1;
     let happy_suffix = if happy_available { "" } else { " (not installed)" };
-    println!(
-        "  {}. happy (wrap default: {}){}",
-        happy_index, default_backend, happy_suffix
-    );
+    println!("  {happy_index}. happy (wrap default: {default_backend}){happy_suffix}");
 
     print!("Backend (enter for default: {default_backend}): ");
     io::stdout().flush()?;

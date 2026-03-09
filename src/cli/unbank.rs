@@ -74,6 +74,7 @@ pub async fn run(name: &str, spawn: bool, force: bool) -> Result<()> {
             branch_name: name,
             worktree_path: &worktree_path,
             tmux_session: &tmux_session,
+            runtime_kind: session_manager.kind().as_str(),
             backend: &backend.name,
             note: restored_note.as_deref(),
         })?;
