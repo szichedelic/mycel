@@ -93,7 +93,27 @@ pub struct NewSessionRuntime<'a> {
     pub state: &'a str,
 }
 
+/// A registered remote host that can run sessions.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct Host {
+    pub id: i64,
+    pub name: String,
+    pub docker_host: String,
+    pub max_sessions: i64,
+    pub enabled: bool,
+}
+
 impl Database {
+    /// Create an in-memory database for testing.
+    #[cfg(test)]
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        let db = Self { conn };
+        db.init_schema()?;
+        Ok(db)
+    }
+
     pub fn open() -> Result<Self> {
         let db_path = dirs::data_dir()
             .context("Could not find data directory")?
@@ -156,6 +176,7 @@ impl Database {
         self.ensure_sessions_runtime_kind()?;
         self.ensure_session_runtimes_table()?;
         self.ensure_session_services_table()?;
+        self.ensure_hosts_table()?;
         self.backfill_tmux_runtimes()?;
         Ok(())
     }
@@ -678,6 +699,142 @@ impl Database {
 
         Ok(result)
     }
+
+    // -- hosts table --
+
+    fn ensure_hosts_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS hosts (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                docker_host TEXT NOT NULL,
+                max_sessions INTEGER NOT NULL DEFAULT 4,
+                enabled INTEGER NOT NULL DEFAULT 1
+            );",
+        )?;
+        Ok(())
+    }
+
+    pub fn add_host(&self, name: &str, docker_host: &str, max_sessions: i64) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO hosts (name, docker_host, max_sessions) VALUES (?1, ?2, ?3)",
+            params![name, docker_host, max_sessions],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn remove_host(&self, name: &str) -> Result<bool> {
+        let affected = self.conn.execute(
+            "DELETE FROM hosts WHERE name = ?1",
+            params![name],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub fn list_hosts(&self) -> Result<Vec<Host>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, docker_host, max_sessions, enabled FROM hosts ORDER BY name",
+        )?;
+
+        let hosts = stmt
+            .query_map([], |row| {
+                Ok(Host {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    docker_host: row.get(2)?,
+                    max_sessions: row.get(3)?,
+                    enabled: row.get::<_, i32>(4)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(hosts)
+    }
+
+    #[allow(dead_code)]
+    pub fn get_host_by_name(&self, name: &str) -> Result<Option<Host>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, docker_host, max_sessions, enabled FROM hosts WHERE name = ?1",
+        )?;
+
+        let result = stmt.query_row(params![name], |row| {
+            Ok(Host {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                docker_host: row.get(2)?,
+                max_sessions: row.get(3)?,
+                enabled: row.get::<_, i32>(4)? != 0,
+            })
+        });
+
+        match result {
+            Ok(host) => Ok(Some(host)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn set_host_enabled(&self, name: &str, enabled: bool) -> Result<bool> {
+        let affected = self.conn.execute(
+            "UPDATE hosts SET enabled = ?1 WHERE name = ?2",
+            params![enabled as i32, name],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// Count active sessions on a given host.
+    pub fn count_sessions_on_host(&self, docker_host: &str) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM session_runtimes WHERE host = ?1 AND state = 'running'",
+            params![docker_host],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    /// Find sessions whose runtimes haven't been seen since `cutoff_unix`.
+    pub fn find_idle_runtimes(&self, cutoff_unix: i64) -> Result<Vec<(Session, SessionRuntime)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.name, COALESCE(s.branch_name, s.name), s.worktree_path, s.tmux_session,
+                    COALESCE(s.runtime_kind, 'tmux'), s.backend, s.note,
+                    CAST(strftime('%s', s.created_at) AS INTEGER),
+                    r.id, r.session_id, r.provider, r.host, r.runtime_ref, r.compose_project,
+                    r.state, CAST(strftime('%s', r.last_seen) AS INTEGER)
+             FROM sessions s
+             JOIN session_runtimes r ON r.session_id = s.id
+             WHERE r.state = 'running'
+               AND CAST(strftime('%s', r.last_seen) AS INTEGER) < ?1",
+        )?;
+
+        let rows = stmt
+            .query_map(params![cutoff_unix], |row| {
+                let session = Session {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    branch_name: row.get(2)?,
+                    worktree_path: PathBuf::from(row.get::<_, String>(3)?),
+                    tmux_session: row.get(4)?,
+                    runtime_kind: row.get(5)?,
+                    backend: row.get(6)?,
+                    note: row.get(7)?,
+                    created_at_unix: row.get(8)?,
+                };
+                let runtime = SessionRuntime {
+                    id: row.get(9)?,
+                    session_id: row.get(10)?,
+                    provider: row.get(11)?,
+                    host: row.get(12)?,
+                    runtime_ref: row.get(13)?,
+                    compose_project: row.get(14)?,
+                    state: row.get(15)?,
+                    last_seen_unix: row.get(16)?,
+                };
+                Ok((session, runtime))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]
@@ -894,5 +1051,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn host_crud_lifecycle() {
+        let db = in_memory_db();
+
+        // Add hosts
+        db.add_host("devbox", "ssh://user@devbox", 4).unwrap();
+        db.add_host("ci-runner", "ssh://ci@runner", 2).unwrap();
+
+        // List
+        let hosts = db.list_hosts().unwrap();
+        assert_eq!(hosts.len(), 2);
+        assert!(hosts[0].enabled);
+
+        // Disable
+        db.set_host_enabled("devbox", false).unwrap();
+        let host = db.get_host_by_name("devbox").unwrap().unwrap();
+        assert!(!host.enabled);
+
+        // Remove
+        assert!(db.remove_host("ci-runner").unwrap());
+        assert!(!db.remove_host("nonexistent").unwrap());
+        assert_eq!(db.list_hosts().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn count_sessions_on_host_counts_running_only() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = seed_session(&db, pid);
+
+        // Backfill creates a runtime on "local"
+        assert_eq!(db.count_sessions_on_host("local").unwrap(), 1);
+        assert_eq!(db.count_sessions_on_host("ssh://other").unwrap(), 0);
+
+        // Mark as stopped — should not count
+        let rt = db.get_session_runtime(sid).unwrap().unwrap();
+        db.update_runtime_state(rt.id, "stopped").unwrap();
+        assert_eq!(db.count_sessions_on_host("local").unwrap(), 0);
     }
 }

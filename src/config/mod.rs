@@ -16,6 +16,20 @@ pub struct GlobalConfig {
     pub backend: Option<String>,
     #[serde(default)]
     pub backends: BTreeMap<String, BackendConfig>,
+    #[serde(default)]
+    pub hosts: Vec<HostConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostConfig {
+    pub name: String,
+    pub docker_host: String,
+    #[serde(default = "default_max_sessions")]
+    pub max_sessions: i64,
+}
+
+fn default_max_sessions() -> i64 {
+    4
 }
 
 fn default_terminal() -> String {
@@ -34,6 +48,7 @@ impl Default for GlobalConfig {
             refresh_rate: default_refresh_rate(),
             backend: None,
             backends: BTreeMap::new(),
+            hosts: Vec::new(),
         }
     }
 }

@@ -148,6 +148,18 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Manage remote host registry
+    #[command(subcommand)]
+    Host(HostCommands),
+    /// Reap idle session runtimes
+    Reap {
+        /// Minutes of inactivity before reaping
+        #[arg(long, default_value_t = 60)]
+        idle_minutes: u64,
+        /// Show what would be reaped without acting
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Serve the TUI over a local web server
     Web {
         /// Host to bind (use 0.0.0.0 to reach from your phone)
@@ -165,6 +177,37 @@ enum Commands {
         /// TLS private key (PEM) for HTTPS
         #[arg(long)]
         tls_key: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostCommands {
+    /// Register a new remote host
+    Add {
+        /// Friendly name for the host
+        name: String,
+        /// Docker host URI (e.g. ssh://user@host)
+        docker_host: String,
+        /// Maximum concurrent sessions
+        #[arg(long, default_value_t = 4)]
+        max_sessions: i64,
+    },
+    /// Remove a registered host
+    Remove {
+        /// Name of the host to remove
+        name: String,
+    },
+    /// List registered hosts and their load
+    List,
+    /// Enable a disabled host
+    Enable {
+        /// Name of the host
+        name: String,
+    },
+    /// Disable a host (stops new placements)
+    Disable {
+        /// Name of the host
+        name: String,
     },
 }
 
@@ -220,6 +263,21 @@ async fn main() -> Result<()> {
             host,
             force,
         }) => cli::handoff::run(&name, &to, host.as_deref(), force).await,
+        Some(Commands::Host(sub)) => match sub {
+            HostCommands::Add {
+                name,
+                docker_host,
+                max_sessions,
+            } => cli::host::add(&name, &docker_host, max_sessions).await,
+            HostCommands::Remove { name } => cli::host::remove(&name).await,
+            HostCommands::List => cli::host::list().await,
+            HostCommands::Enable { name } => cli::host::enable(&name).await,
+            HostCommands::Disable { name } => cli::host::disable(&name).await,
+        },
+        Some(Commands::Reap {
+            idle_minutes,
+            dry_run,
+        }) => cli::reap::run(idle_minutes, dry_run).await,
         Some(Commands::Web {
             host,
             port,

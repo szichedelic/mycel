@@ -5,12 +5,15 @@ use crate::config::ResolvedBackend;
 
 pub mod compose;
 pub mod handoff;
+pub mod placement;
 pub mod remote;
 pub mod runtime;
 pub mod tmux;
 
 pub use compose::ComposeProvider;
 pub use handoff::{handoff_session, HandoffTarget};
+#[allow(unused_imports)]
+pub use placement::pick_host;
 pub use remote::RemoteProvider;
 pub use runtime::{RuntimeKind, RuntimeProvider};
 pub use tmux::TmuxProvider;
