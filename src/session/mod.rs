@@ -4,10 +4,12 @@ use std::path::Path;
 use crate::config::ResolvedBackend;
 
 pub mod compose;
+pub mod remote;
 pub mod runtime;
 pub mod tmux;
 
 pub use compose::ComposeProvider;
+pub use remote::RemoteProvider;
 pub use runtime::{RuntimeKind, RuntimeProvider};
 pub use tmux::TmuxProvider;
 
@@ -23,10 +25,21 @@ impl SessionManager {
     }
 
     /// Create a SessionManager with the correct provider for a stored runtime kind.
+    /// For `Remote`, falls back to a default localhost host — prefer `for_kind_with_host`
+    /// when a real host is available.
     pub fn for_kind(kind: RuntimeKind) -> Self {
+        match kind {
+            RuntimeKind::Remote => Self::for_kind_with_host(kind, "ssh://localhost"),
+            _ => Self::for_kind_with_host(kind, "local"),
+        }
+    }
+
+    /// Create a SessionManager with host context for remote providers.
+    pub fn for_kind_with_host(kind: RuntimeKind, host: &str) -> Self {
         let provider: Box<dyn RuntimeProvider> = match kind {
             RuntimeKind::Tmux => Box::new(TmuxProvider::new()),
             RuntimeKind::Compose => Box::new(ComposeProvider::new()),
+            RuntimeKind::Remote => Box::new(RemoteProvider::new(host.to_string())),
         };
         Self { provider }
     }
@@ -36,6 +49,14 @@ impl SessionManager {
     pub fn for_kind_str(kind_str: &str) -> Self {
         let kind = RuntimeKind::from_str(kind_str).unwrap_or(RuntimeKind::Tmux);
         Self::for_kind(kind)
+    }
+
+    /// Create a SessionManager from a runtime_kind string and host.
+    /// Use when operating on existing sessions that have host metadata.
+    #[allow(dead_code)]
+    pub fn for_kind_str_with_host(kind_str: &str, host: &str) -> Self {
+        let kind = RuntimeKind::from_str(kind_str).unwrap_or(RuntimeKind::Tmux);
+        Self::for_kind_with_host(kind, host)
     }
 
     #[allow(dead_code)]
@@ -102,17 +123,33 @@ mod tests {
 
         let sm = SessionManager::for_kind(RuntimeKind::Compose);
         assert_eq!(sm.kind(), RuntimeKind::Compose);
+
+        let sm = SessionManager::for_kind(RuntimeKind::Remote);
+        assert_eq!(sm.kind(), RuntimeKind::Remote);
     }
 
     #[test]
     fn for_kind_str_parses_known_kinds() {
         assert_eq!(SessionManager::for_kind_str("tmux").kind(), RuntimeKind::Tmux);
         assert_eq!(SessionManager::for_kind_str("compose").kind(), RuntimeKind::Compose);
+        assert_eq!(SessionManager::for_kind_str("remote").kind(), RuntimeKind::Remote);
     }
 
     #[test]
     fn for_kind_str_falls_back_to_tmux() {
         assert_eq!(SessionManager::for_kind_str("unknown").kind(), RuntimeKind::Tmux);
         assert_eq!(SessionManager::for_kind_str("").kind(), RuntimeKind::Tmux);
+    }
+
+    #[test]
+    fn for_kind_with_host_creates_remote_provider() {
+        let sm = SessionManager::for_kind_with_host(RuntimeKind::Remote, "ssh://user@devbox");
+        assert_eq!(sm.kind(), RuntimeKind::Remote);
+    }
+
+    #[test]
+    fn for_kind_str_with_host_parses_remote() {
+        let sm = SessionManager::for_kind_str_with_host("remote", "ssh://user@devbox");
+        assert_eq!(sm.kind(), RuntimeKind::Remote);
     }
 }

@@ -9,6 +9,7 @@ use crate::config::ResolvedBackend;
 pub enum RuntimeKind {
     Tmux,
     Compose,
+    Remote,
 }
 
 impl RuntimeKind {
@@ -16,6 +17,7 @@ impl RuntimeKind {
         match self {
             RuntimeKind::Tmux => "tmux",
             RuntimeKind::Compose => "compose",
+            RuntimeKind::Remote => "remote",
         }
     }
 
@@ -23,6 +25,7 @@ impl RuntimeKind {
         match s {
             "tmux" => Some(RuntimeKind::Tmux),
             "compose" => Some(RuntimeKind::Compose),
+            "remote" => Some(RuntimeKind::Remote),
             _ => None,
         }
     }
