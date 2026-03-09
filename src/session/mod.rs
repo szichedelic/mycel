@@ -4,11 +4,13 @@ use std::path::Path;
 use crate::config::ResolvedBackend;
 
 pub mod compose;
+pub mod handoff;
 pub mod remote;
 pub mod runtime;
 pub mod tmux;
 
 pub use compose::ComposeProvider;
+pub use handoff::{handoff_session, HandoffTarget};
 pub use remote::RemoteProvider;
 pub use runtime::{RuntimeKind, RuntimeProvider};
 pub use tmux::TmuxProvider;

@@ -134,6 +134,20 @@ enum Commands {
         /// New session name
         to: String,
     },
+    /// Hand off a session to a different runtime (e.g. tmux -> compose, local -> remote)
+    Handoff {
+        /// Name of the session to hand off
+        name: String,
+        /// Destination runtime kind (tmux, compose, remote)
+        #[arg(long)]
+        to: String,
+        /// Remote host for remote handoff (e.g. ssh://user@host)
+        #[arg(long)]
+        host: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
     /// Serve the TUI over a local web server
     Web {
         /// Host to bind (use 0.0.0.0 to reach from your phone)
@@ -200,6 +214,12 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Notify { interval }) => cli::notify::run(interval).await,
         Some(Commands::Rename { from, to }) => cli::rename::run(&from, &to).await,
+        Some(Commands::Handoff {
+            name,
+            to,
+            host,
+            force,
+        }) => cli::handoff::run(&name, &to, host.as_deref(), force).await,
         Some(Commands::Web {
             host,
             port,

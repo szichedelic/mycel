@@ -464,6 +464,30 @@ impl Database {
         Ok(())
     }
 
+    /// Update the runtime kind and runtime_id for a session during handoff.
+    pub fn update_session_runtime_kind(
+        &self,
+        session_id: i64,
+        runtime_kind: &str,
+        runtime_id: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET runtime_kind = ?1, tmux_session = ?2 WHERE id = ?3",
+            params![runtime_kind, runtime_id, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Replace the session_runtimes row for a handoff.
+    /// Deletes the old runtime (cascading to services) and inserts a new one.
+    pub fn replace_session_runtime(&self, rt: &NewSessionRuntime) -> Result<i64> {
+        self.conn.execute(
+            "DELETE FROM session_runtimes WHERE session_id = ?1",
+            params![rt.session_id],
+        )?;
+        self.add_session_runtime(rt)
+    }
+
     // -- session_runtimes / session_services migrations --
 
     fn ensure_session_runtimes_table(&self) -> Result<()> {
@@ -819,5 +843,56 @@ mod tests {
         let db = in_memory_db();
         // Running init_schema again should not fail
         db.init_schema().unwrap();
+    }
+
+    #[test]
+    fn update_session_runtime_kind_changes_kind_and_id() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = seed_session(&db, pid);
+
+        db.update_session_runtime_kind(sid, "compose", "mycel-test-feat-x")
+            .unwrap();
+
+        let session = db.get_session_by_name(pid, "feat-x").unwrap().unwrap();
+        assert_eq!(session.runtime_kind, "compose");
+        assert_eq!(session.tmux_session, "mycel-test-feat-x");
+    }
+
+    #[test]
+    fn replace_session_runtime_swaps_row() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = seed_session(&db, pid);
+
+        // Original is tmux/local from backfill
+        let rt = db.get_session_runtime(sid).unwrap().unwrap();
+        assert_eq!(rt.provider, "tmux");
+
+        // Replace with compose
+        db.replace_session_runtime(&NewSessionRuntime {
+            session_id: sid,
+            provider: "compose",
+            host: "local",
+            runtime_ref: "mycel-test-compose",
+            compose_project: Some("mycel-test-compose"),
+            state: "running",
+        })
+        .unwrap();
+
+        let rt2 = db.get_session_runtime(sid).unwrap().unwrap();
+        assert_eq!(rt2.provider, "compose");
+        assert_eq!(rt2.runtime_ref, "mycel-test-compose");
+
+        // Only one runtime row should exist
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_runtimes WHERE session_id = ?1",
+                params![sid],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
