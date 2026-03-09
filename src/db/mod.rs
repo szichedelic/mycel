@@ -47,6 +47,48 @@ pub struct NewSession<'a> {
     pub note: Option<&'a str>,
 }
 
+/// Provider-neutral runtime metadata for a session.
+#[derive(Debug, Clone)]
+pub struct SessionRuntime {
+    pub id: i64,
+    pub session_id: i64,
+    pub provider: String,
+    pub host: String,
+    pub runtime_ref: String,
+    pub compose_project: Option<String>,
+    pub state: String,
+    pub last_seen_unix: i64,
+}
+
+/// A service belonging to a session runtime (e.g. the primary AI backend container).
+#[derive(Debug, Clone)]
+pub struct SessionService {
+    pub id: i64,
+    pub runtime_id: i64,
+    pub service_name: String,
+    pub is_primary: bool,
+    pub health: String,
+    pub ports: Option<String>,
+    pub status: String,
+}
+
+/// A session with its optional runtime summary attached.
+#[derive(Debug, Clone)]
+pub struct SessionWithRuntime {
+    pub session: Session,
+    pub runtime: Option<SessionRuntime>,
+    pub services: Vec<SessionService>,
+}
+
+pub struct NewSessionRuntime<'a> {
+    pub session_id: i64,
+    pub provider: &'a str,
+    pub host: &'a str,
+    pub runtime_ref: &'a str,
+    pub compose_project: Option<&'a str>,
+    pub state: &'a str,
+}
+
 impl Database {
     pub fn open() -> Result<Self> {
         let db_path = dirs::data_dir()
@@ -67,6 +109,7 @@ impl Database {
     }
 
     fn init_schema(&self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         self.conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS projects (
@@ -107,6 +150,9 @@ impl Database {
         self.ensure_sessions_backend()?;
         self.ensure_sessions_branch_name()?;
         self.ensure_sessions_runtime_kind()?;
+        self.ensure_session_runtimes_table()?;
+        self.ensure_session_services_table()?;
+        self.backfill_tmux_runtimes()?;
         Ok(())
     }
 
@@ -412,5 +458,355 @@ impl Database {
         )?;
 
         Ok(())
+    }
+
+    // -- session_runtimes / session_services migrations --
+
+    fn ensure_session_runtimes_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS session_runtimes (
+                id INTEGER PRIMARY KEY,
+                session_id INTEGER NOT NULL UNIQUE,
+                provider TEXT NOT NULL,
+                host TEXT NOT NULL DEFAULT 'local',
+                runtime_ref TEXT NOT NULL,
+                compose_project TEXT,
+                state TEXT NOT NULL DEFAULT 'running',
+                last_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );",
+        )?;
+        Ok(())
+    }
+
+    fn ensure_session_services_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS session_services (
+                id INTEGER PRIMARY KEY,
+                runtime_id INTEGER NOT NULL,
+                service_name TEXT NOT NULL,
+                is_primary INTEGER NOT NULL DEFAULT 0,
+                health TEXT NOT NULL DEFAULT 'unknown',
+                ports TEXT,
+                status TEXT NOT NULL DEFAULT 'unknown',
+                FOREIGN KEY (runtime_id) REFERENCES session_runtimes(id) ON DELETE CASCADE
+            );",
+        )?;
+        Ok(())
+    }
+
+    fn backfill_tmux_runtimes(&self) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO session_runtimes (session_id, provider, host, runtime_ref, state)
+             SELECT id, 'tmux', 'local', tmux_session, 'running'
+             FROM sessions
+             WHERE id NOT IN (SELECT session_id FROM session_runtimes)",
+            [],
+        )?;
+        Ok(())
+    }
+
+    // -- session_runtimes CRUD --
+
+    pub fn add_session_runtime(&self, rt: &NewSessionRuntime) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO session_runtimes (session_id, provider, host, runtime_ref, compose_project, state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                rt.session_id,
+                rt.provider,
+                rt.host,
+                rt.runtime_ref,
+                rt.compose_project,
+                rt.state,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_session_runtime(&self, session_id: i64) -> Result<Option<SessionRuntime>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, provider, host, runtime_ref, compose_project, state,
+                    CAST(strftime('%s', last_seen) AS INTEGER)
+             FROM session_runtimes WHERE session_id = ?1",
+        )?;
+
+        let result = stmt.query_row(params![session_id], |row| {
+            Ok(SessionRuntime {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                provider: row.get(2)?,
+                host: row.get(3)?,
+                runtime_ref: row.get(4)?,
+                compose_project: row.get(5)?,
+                state: row.get(6)?,
+                last_seen_unix: row.get(7)?,
+            })
+        });
+
+        match result {
+            Ok(rt) => Ok(Some(rt)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn update_runtime_state(&self, runtime_id: i64, state: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE session_runtimes SET state = ?1, last_seen = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![state, runtime_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn touch_runtime(&self, runtime_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE session_runtimes SET last_seen = CURRENT_TIMESTAMP WHERE id = ?1",
+            params![runtime_id],
+        )?;
+        Ok(())
+    }
+
+    // -- session_services CRUD --
+
+    pub fn add_session_service(
+        &self,
+        runtime_id: i64,
+        service_name: &str,
+        is_primary: bool,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO session_services (runtime_id, service_name, is_primary)
+             VALUES (?1, ?2, ?3)",
+            params![runtime_id, service_name, is_primary as i32],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn list_services_for_runtime(&self, runtime_id: i64) -> Result<Vec<SessionService>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, runtime_id, service_name, is_primary, health, ports, status
+             FROM session_services WHERE runtime_id = ?1",
+        )?;
+
+        let services = stmt
+            .query_map(params![runtime_id], |row| {
+                Ok(SessionService {
+                    id: row.get(0)?,
+                    runtime_id: row.get(1)?,
+                    service_name: row.get(2)?,
+                    is_primary: row.get::<_, i32>(3)? != 0,
+                    health: row.get(4)?,
+                    ports: row.get(5)?,
+                    status: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(services)
+    }
+
+    pub fn update_service_health(
+        &self,
+        service_id: i64,
+        health: &str,
+        status: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE session_services SET health = ?1, status = ?2 WHERE id = ?3",
+            params![health, status, service_id],
+        )?;
+        Ok(())
+    }
+
+    // -- Joined query: sessions with runtime summaries --
+
+    pub fn list_sessions_with_runtimes(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<SessionWithRuntime>> {
+        let sessions = self.list_sessions(project_id)?;
+        let mut result = Vec::with_capacity(sessions.len());
+
+        for session in sessions {
+            let runtime = self.get_session_runtime(session.id)?;
+            let services = match &runtime {
+                Some(rt) => self.list_services_for_runtime(rt.id)?,
+                None => Vec::new(),
+            };
+            result.push(SessionWithRuntime {
+                session,
+                runtime,
+                services,
+            });
+        }
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_memory_db() -> Database {
+        let conn = Connection::open_in_memory().unwrap();
+        let db = Database { conn };
+        db.init_schema().unwrap();
+        db
+    }
+
+    fn seed_project(db: &Database) -> i64 {
+        db.add_project("test-project", Path::new("/tmp/test")).unwrap()
+    }
+
+    fn seed_session(db: &Database, project_id: i64) -> i64 {
+        let sid = db
+            .add_session(&NewSession {
+                project_id,
+                name: "feat-x",
+                branch_name: "feat-x",
+                worktree_path: Path::new("/tmp/wt"),
+                tmux_session: "mycel_test_feat-x",
+                runtime_kind: "tmux",
+                backend: "claude",
+                note: None,
+            })
+            .unwrap();
+        // Simulate what backfill does for sessions created after migration
+        db.backfill_tmux_runtimes().unwrap();
+        sid
+    }
+
+    #[test]
+    fn fresh_schema_creates_runtime_tables() {
+        let db = in_memory_db();
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_runtimes'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_services'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn backfill_creates_runtime_for_existing_sessions() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = seed_session(&db, pid);
+
+        let rt = db.get_session_runtime(sid).unwrap();
+        assert!(rt.is_some());
+        let rt = rt.unwrap();
+        assert_eq!(rt.provider, "tmux");
+        assert_eq!(rt.host, "local");
+        assert_eq!(rt.runtime_ref, "mycel_test_feat-x");
+        assert_eq!(rt.state, "running");
+    }
+
+    #[test]
+    fn backfill_is_idempotent() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        seed_session(&db, pid);
+
+        // Run backfill again — should not fail or duplicate
+        db.backfill_tmux_runtimes().unwrap();
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM session_runtimes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn add_and_list_services() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = seed_session(&db, pid);
+
+        let rt = db.get_session_runtime(sid).unwrap().unwrap();
+        db.add_session_service(rt.id, "claude-agent", true).unwrap();
+        db.add_session_service(rt.id, "web-server", false).unwrap();
+
+        let services = db.list_services_for_runtime(rt.id).unwrap();
+        assert_eq!(services.len(), 2);
+        assert!(services[0].is_primary);
+        assert!(!services[1].is_primary);
+    }
+
+    #[test]
+    fn list_sessions_with_runtimes_joins_correctly() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = seed_session(&db, pid);
+
+        let rt = db.get_session_runtime(sid).unwrap().unwrap();
+        db.add_session_service(rt.id, "agent", true).unwrap();
+
+        let sessions = db.list_sessions_with_runtimes(pid).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].runtime.is_some());
+        assert_eq!(sessions[0].services.len(), 1);
+    }
+
+    #[test]
+    fn delete_session_cascades_to_runtime_and_services() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = seed_session(&db, pid);
+
+        let rt = db.get_session_runtime(sid).unwrap().unwrap();
+        db.add_session_service(rt.id, "agent", true).unwrap();
+
+        db.delete_session(sid).unwrap();
+
+        let rt_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM session_runtimes", [], |row| row.get(0))
+            .unwrap();
+        let svc_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM session_services", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rt_count, 0);
+        assert_eq!(svc_count, 0);
+    }
+
+    #[test]
+    fn update_runtime_state_and_touch() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = seed_session(&db, pid);
+
+        let rt = db.get_session_runtime(sid).unwrap().unwrap();
+        db.update_runtime_state(rt.id, "stopped").unwrap();
+
+        let rt2 = db.get_session_runtime(sid).unwrap().unwrap();
+        assert_eq!(rt2.state, "stopped");
+
+        db.touch_runtime(rt.id).unwrap();
+        let rt3 = db.get_session_runtime(sid).unwrap().unwrap();
+        assert!(rt3.last_seen_unix >= rt2.last_seen_unix);
+    }
+
+    #[test]
+    fn schema_idempotent_on_reopen() {
+        let db = in_memory_db();
+        // Running init_schema again should not fail
+        db.init_schema().unwrap();
     }
 }
