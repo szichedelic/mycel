@@ -49,6 +49,7 @@ pub struct NewSession<'a> {
 
 /// Provider-neutral runtime metadata for a session.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SessionRuntime {
     pub id: i64,
     pub session_id: i64,
@@ -62,6 +63,7 @@ pub struct SessionRuntime {
 
 /// A service belonging to a session runtime (e.g. the primary AI backend container).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SessionService {
     pub id: i64,
     pub runtime_id: i64,
@@ -74,12 +76,14 @@ pub struct SessionService {
 
 /// A session with its optional runtime summary attached.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SessionWithRuntime {
     pub session: Session,
     pub runtime: Option<SessionRuntime>,
     pub services: Vec<SessionService>,
 }
 
+#[allow(dead_code)]
 pub struct NewSessionRuntime<'a> {
     pub session_id: i64,
     pub provider: &'a str,
@@ -508,6 +512,7 @@ impl Database {
 
     // -- session_runtimes CRUD --
 
+    #[allow(dead_code)]
     pub fn add_session_runtime(&self, rt: &NewSessionRuntime) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO session_runtimes (session_id, provider, host, runtime_ref, compose_project, state)
@@ -551,6 +556,7 @@ impl Database {
         }
     }
 
+    #[allow(dead_code)]
     pub fn update_runtime_state(&self, runtime_id: i64, state: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE session_runtimes SET state = ?1, last_seen = CURRENT_TIMESTAMP WHERE id = ?2",
@@ -559,6 +565,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn touch_runtime(&self, runtime_id: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE session_runtimes SET last_seen = CURRENT_TIMESTAMP WHERE id = ?1",
@@ -569,6 +576,7 @@ impl Database {
 
     // -- session_services CRUD --
 
+    #[allow(dead_code)]
     pub fn add_session_service(
         &self,
         runtime_id: i64,
@@ -583,6 +591,7 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    #[allow(dead_code)]
     pub fn list_services_for_runtime(&self, runtime_id: i64) -> Result<Vec<SessionService>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, runtime_id, service_name, is_primary, health, ports, status
@@ -606,6 +615,7 @@ impl Database {
         Ok(services)
     }
 
+    #[allow(dead_code)]
     pub fn update_service_health(
         &self,
         service_id: i64,
@@ -621,6 +631,7 @@ impl Database {
 
     // -- Joined query: sessions with runtime summaries --
 
+    #[allow(dead_code)]
     pub fn list_sessions_with_runtimes(
         &self,
         project_id: i64,

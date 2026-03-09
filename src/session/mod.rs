@@ -3,9 +3,12 @@ use std::path::Path;
 
 use crate::config::ResolvedBackend;
 
+pub mod compose;
 pub mod runtime;
 pub mod tmux;
 
+#[allow(unused_imports)]
+pub use compose::ComposeProvider;
 pub use runtime::{RuntimeKind, RuntimeProvider};
 pub use tmux::TmuxProvider;
 

@@ -8,12 +8,14 @@ use crate::config::ResolvedBackend;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeKind {
     Tmux,
+    Compose,
 }
 
 impl RuntimeKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             RuntimeKind::Tmux => "tmux",
+            RuntimeKind::Compose => "compose",
         }
     }
 
@@ -21,6 +23,7 @@ impl RuntimeKind {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "tmux" => Some(RuntimeKind::Tmux),
+            "compose" => Some(RuntimeKind::Compose),
             _ => None,
         }
     }
