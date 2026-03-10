@@ -69,7 +69,14 @@ pub async fn run(name: &str, to: &str, host: Option<&str>, force: bool) -> Resul
         dest_kind.as_str()
     );
 
-    let result = handoff_session(&db, &session, &project.name, &target, &backend, &config.setup)?;
+    let result = handoff_session(
+        &db,
+        &session,
+        &project.name,
+        &target,
+        &backend,
+        &config.setup,
+    )?;
 
     println!(
         "Session '{name}' is now running on {} (runtime: {})",

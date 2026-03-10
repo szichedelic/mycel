@@ -229,7 +229,10 @@ impl App {
         self.hosts.clear();
         if let Ok(hosts) = self.db.list_hosts() {
             for host in hosts {
-                let load = self.db.count_sessions_on_host(&host.docker_host).unwrap_or(0);
+                let load = self
+                    .db
+                    .count_sessions_on_host(&host.docker_host)
+                    .unwrap_or(0);
                 self.hosts.push(HostWithLoad { host, load });
             }
         }
@@ -274,20 +277,28 @@ impl App {
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ) -> Result<()> {
-        let (project_name, project_path, session_id, session_name, tmux_session, worktree_path, backend_name, runtime_kind) =
-            match self.get_selected_item() {
-                Some(SelectedItem::Session(project, session)) => (
-                    project.project.name.clone(),
-                    project.project.path.clone(),
-                    session.session.id,
-                    session.session.name.clone(),
-                    session.session.tmux_session.clone(),
-                    session.session.worktree_path.clone(),
-                    session.session.backend.clone(),
-                    session.session.runtime_kind.clone(),
-                ),
-                _ => return Ok(()),
-            };
+        let (
+            project_name,
+            project_path,
+            session_id,
+            session_name,
+            tmux_session,
+            worktree_path,
+            backend_name,
+            runtime_kind,
+        ) = match self.get_selected_item() {
+            Some(SelectedItem::Session(project, session)) => (
+                project.project.name.clone(),
+                project.project.path.clone(),
+                session.session.id,
+                session.session.name.clone(),
+                session.session.tmux_session.clone(),
+                session.session.worktree_path.clone(),
+                session.session.backend.clone(),
+                session.session.runtime_kind.clone(),
+            ),
+            _ => return Ok(()),
+        };
 
         disable_raw_mode()?;
         execute!(
@@ -678,12 +689,14 @@ pub async fn run() -> Result<()> {
                                     terminal.clear()?;
                                 }
                                 KeyCode::Char('+') => {
-                                    app.reap_threshold_minutes = app.reap_threshold_minutes.saturating_add(30);
+                                    app.reap_threshold_minutes =
+                                        app.reap_threshold_minutes.saturating_add(30);
                                     app.refresh_idle_runtimes();
                                     app.clamp_selection();
                                 }
                                 KeyCode::Char('-') => {
-                                    app.reap_threshold_minutes = app.reap_threshold_minutes.saturating_sub(30).max(10);
+                                    app.reap_threshold_minutes =
+                                        app.reap_threshold_minutes.saturating_sub(30).max(10);
                                     app.refresh_idle_runtimes();
                                     app.clamp_selection();
                                 }
@@ -701,7 +714,8 @@ pub async fn run() -> Result<()> {
                                             _ => None,
                                         }
                                     };
-                                    if let Some((name, runtime_id, runtime_kind, rt_db_id)) = target {
+                                    if let Some((name, runtime_id, runtime_kind, rt_db_id)) = target
+                                    {
                                         disable_raw_mode()?;
                                         execute!(
                                             terminal.backend_mut(),
@@ -717,15 +731,21 @@ pub async fn run() -> Result<()> {
                                                     println!("Failed to kill {name}: {e}");
                                                 }
                                             }
-                                            if let Err(e) = app.db.update_runtime_state(rt_db_id, "reaped") {
+                                            if let Err(e) =
+                                                app.db.update_runtime_state(rt_db_id, "reaped")
+                                            {
                                                 println!("Failed to update state: {e}");
                                             } else {
                                                 println!("Reaped: {name}");
                                             }
-                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                500,
+                                            ));
                                         } else {
                                             println!("Cancelled.");
-                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                500,
+                                            ));
                                         }
 
                                         enable_raw_mode()?;
@@ -754,16 +774,22 @@ pub async fn run() -> Result<()> {
                                         if confirm::prompt_confirm(&prompt)? {
                                             let mut reaped = 0;
                                             // Collect data to avoid borrow issues
-                                            let targets: Vec<_> = app.idle_runtimes.iter().map(|idle| {
-                                                (
-                                                    idle.session.name.clone(),
-                                                    idle.session.tmux_session.clone(),
-                                                    idle.session.runtime_kind.clone(),
-                                                    idle.runtime.id,
-                                                )
-                                            }).collect();
+                                            let targets: Vec<_> = app
+                                                .idle_runtimes
+                                                .iter()
+                                                .map(|idle| {
+                                                    (
+                                                        idle.session.name.clone(),
+                                                        idle.session.tmux_session.clone(),
+                                                        idle.session.runtime_kind.clone(),
+                                                        idle.runtime.id,
+                                                    )
+                                                })
+                                                .collect();
 
-                                            for (name, runtime_id, runtime_kind, rt_db_id) in &targets {
+                                            for (name, runtime_id, runtime_kind, rt_db_id) in
+                                                &targets
+                                            {
                                                 let sm = SessionManager::for_kind_str(runtime_kind);
                                                 if sm.is_alive(runtime_id).unwrap_or(false) {
                                                     if let Err(e) = sm.kill(runtime_id) {
@@ -771,7 +797,9 @@ pub async fn run() -> Result<()> {
                                                         continue;
                                                     }
                                                 }
-                                                if let Err(e) = app.db.update_runtime_state(*rt_db_id, "reaped") {
+                                                if let Err(e) =
+                                                    app.db.update_runtime_state(*rt_db_id, "reaped")
+                                                {
                                                     println!("  Failed to update {name}: {e}");
                                                     continue;
                                                 }
@@ -779,10 +807,14 @@ pub async fn run() -> Result<()> {
                                                 reaped += 1;
                                             }
                                             println!("\nReaped {reaped}/{count} idle runtime(s).");
-                                            std::thread::sleep(std::time::Duration::from_millis(800));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                800,
+                                            ));
                                         } else {
                                             println!("Cancelled.");
-                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                500,
+                                            ));
                                         }
 
                                         enable_raw_mode()?;
@@ -824,7 +856,9 @@ pub async fn run() -> Result<()> {
                                     let host_name = {
                                         let items = app.view_items();
                                         match items.get(app.selected) {
-                                            Some(ViewItem::Host { hwl }) => Some((hwl.host.name.clone(), hwl.host.enabled)),
+                                            Some(ViewItem::Host { hwl }) => {
+                                                Some((hwl.host.name.clone(), hwl.host.enabled))
+                                            }
                                             _ => None,
                                         }
                                     };
@@ -860,16 +894,21 @@ pub async fn run() -> Result<()> {
                                             io::stdout().flush()?;
                                             let mut max_str = String::new();
                                             io::stdin().read_line(&mut max_str)?;
-                                            let max_sessions: i64 = max_str.trim().parse().unwrap_or(4);
+                                            let max_sessions: i64 =
+                                                max_str.trim().parse().unwrap_or(4);
 
                                             match app.db.add_host(name, docker_host, max_sessions) {
                                                 Ok(_) => {
                                                     println!("Host '{name}' added.");
-                                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                                    std::thread::sleep(
+                                                        std::time::Duration::from_millis(500),
+                                                    );
                                                 }
                                                 Err(err) => {
                                                     println!("Error adding host: {err}");
-                                                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                                                    std::thread::sleep(
+                                                        std::time::Duration::from_millis(1000),
+                                                    );
                                                 }
                                             }
                                         }
@@ -889,7 +928,9 @@ pub async fn run() -> Result<()> {
                                     let host_name = {
                                         let items = app.view_items();
                                         match items.get(app.selected) {
-                                            Some(ViewItem::Host { hwl }) => Some(hwl.host.name.clone()),
+                                            Some(ViewItem::Host { hwl }) => {
+                                                Some(hwl.host.name.clone())
+                                            }
                                             _ => None,
                                         }
                                     };
@@ -908,10 +949,14 @@ pub async fn run() -> Result<()> {
                                             } else {
                                                 println!("Host '{name}' not found.");
                                             }
-                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                500,
+                                            ));
                                         } else {
                                             println!("Cancelled.");
-                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                500,
+                                            ));
                                         }
 
                                         enable_raw_mode()?;
@@ -1031,9 +1076,16 @@ pub async fn run() -> Result<()> {
                                         }
 
                                         let (chosen_kind, chosen_host) = &runtime_choice;
-                                        let sm = SessionManager::for_kind_with_host(*chosen_kind, chosen_host);
+                                        let sm = SessionManager::for_kind_with_host(
+                                            *chosen_kind,
+                                            chosen_host,
+                                        );
 
-                                        println!("Starting {} session on {}...", backend.name, chosen_kind.as_str());
+                                        println!(
+                                            "Starting {} session on {}...",
+                                            backend.name,
+                                            chosen_kind.as_str()
+                                        );
                                         let setup = merge_setup(&config, template);
                                         if !setup.is_empty() {
                                             println!("Setup: {}", setup.join(" && "));
@@ -1059,18 +1111,23 @@ pub async fn run() -> Result<()> {
                                         // For non-tmux runtimes, explicitly create the runtime row
                                         // (tmux sessions are handled by backfill)
                                         if *chosen_kind != RuntimeKind::Tmux {
-                                            let _ = app.db.replace_session_runtime(&NewSessionRuntime {
-                                                session_id: sid,
-                                                provider: chosen_kind.as_str(),
-                                                host: chosen_host,
-                                                runtime_ref: &runtime_id,
-                                                compose_project: if *chosen_kind == RuntimeKind::Compose || *chosen_kind == RuntimeKind::Remote {
-                                                    Some(&runtime_id)
-                                                } else {
-                                                    None
+                                            let _ = app.db.replace_session_runtime(
+                                                &NewSessionRuntime {
+                                                    session_id: sid,
+                                                    provider: chosen_kind.as_str(),
+                                                    host: chosen_host,
+                                                    runtime_ref: &runtime_id,
+                                                    compose_project: if *chosen_kind
+                                                        == RuntimeKind::Compose
+                                                        || *chosen_kind == RuntimeKind::Remote
+                                                    {
+                                                        Some(&runtime_id)
+                                                    } else {
+                                                        None
+                                                    },
+                                                    state: "running",
                                                 },
-                                                state: "running",
-                                            });
+                                            );
                                         }
 
                                         if let Some(prompt) = template
@@ -1081,8 +1138,7 @@ pub async fn run() -> Result<()> {
                                             std::thread::sleep(std::time::Duration::from_millis(
                                                 600,
                                             ));
-                                            if let Err(err) = sm.send_prompt(&runtime_id, prompt)
-                                            {
+                                            if let Err(err) = sm.send_prompt(&runtime_id, prompt) {
                                                 println!(
                                                     "Warning: failed to send template prompt: {err}"
                                                 );
@@ -1263,7 +1319,10 @@ pub async fn run() -> Result<()> {
                                         DisableMouseCapture
                                     )?;
 
-                                    println!("Handoff session '{}' (currently on {source_kind})", session_data.name);
+                                    println!(
+                                        "Handoff session '{}' (currently on {source_kind})",
+                                        session_data.name
+                                    );
                                     println!("Available targets:");
                                     let mut targets: Vec<(&str, &str)> = Vec::new();
                                     if source_kind != "tmux" {
@@ -1302,7 +1361,8 @@ pub async fn run() -> Result<()> {
                                             if let Ok(index) = selection.parse::<usize>() {
                                                 if index >= 1 && index <= targets.len() {
                                                     let (kind_str, host) = targets[index - 1];
-                                                    let dest_kind = RuntimeKind::from_str(kind_str).unwrap();
+                                                    let dest_kind =
+                                                        RuntimeKind::from_str(kind_str).unwrap();
 
                                                     let prompt = format!(
                                                         "Hand off '{}' from {source_kind} to {kind_str}{}?",
@@ -1311,16 +1371,28 @@ pub async fn run() -> Result<()> {
                                                     );
 
                                                     if confirm::prompt_confirm(&prompt)? {
-                                                        let config = ProjectConfig::load(&project_path)?;
+                                                        let config =
+                                                            ProjectConfig::load(&project_path)?;
                                                         let global_config = GlobalConfig::load()?;
-                                                        let backend = resolve_backend(&global_config, &config, Some(&session_data.backend))?;
+                                                        let backend = resolve_backend(
+                                                            &global_config,
+                                                            &config,
+                                                            Some(&session_data.backend),
+                                                        )?;
                                                         let target = HandoffTarget {
                                                             kind: dest_kind,
                                                             host: host.to_string(),
                                                         };
 
                                                         println!("Handing off...");
-                                                        match handoff_session(&app.db, &session_data, &project_name, &target, &backend, &config.setup) {
+                                                        match handoff_session(
+                                                            &app.db,
+                                                            &session_data,
+                                                            &project_name,
+                                                            &target,
+                                                            &backend,
+                                                            &config.setup,
+                                                        ) {
                                                             Ok(result) => {
                                                                 println!(
                                                                     "Session '{}' is now running on {} (runtime: {})",
@@ -1331,18 +1403,26 @@ pub async fn run() -> Result<()> {
                                                                 println!("Handoff failed: {err}");
                                                             }
                                                         }
-                                                        std::thread::sleep(std::time::Duration::from_millis(800));
+                                                        std::thread::sleep(
+                                                            std::time::Duration::from_millis(800),
+                                                        );
                                                     } else {
                                                         println!("Cancelled.");
-                                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                                        std::thread::sleep(
+                                                            std::time::Duration::from_millis(500),
+                                                        );
                                                     }
                                                 } else {
                                                     println!("Invalid selection.");
-                                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                                    std::thread::sleep(
+                                                        std::time::Duration::from_millis(500),
+                                                    );
                                                 }
                                             } else {
                                                 println!("Invalid selection.");
-                                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                                std::thread::sleep(
+                                                    std::time::Duration::from_millis(500),
+                                                );
                                             }
                                         }
                                     }
@@ -1513,7 +1593,8 @@ pub async fn run() -> Result<()> {
                                                         );
                                                     }
 
-                                                    let sm = SessionManager::for_kind_str(&runtime_kind);
+                                                    let sm =
+                                                        SessionManager::for_kind_str(&runtime_kind);
                                                     if sm.is_alive(&tmux_session)? {
                                                         println!("Stopping session...");
                                                         sm.kill(&tmux_session)?;
@@ -1637,7 +1718,10 @@ pub async fn run() -> Result<()> {
                                                     branch_name: &item_name,
                                                     worktree_path: &worktree_path,
                                                     tmux_session: &tmux_session,
-                                                    runtime_kind: app.session_manager.kind().as_str(),
+                                                    runtime_kind: app
+                                                        .session_manager
+                                                        .kind()
+                                                        .as_str(),
                                                     backend: &backend.name,
                                                     note: restored_note.as_deref(),
                                                 })?;
@@ -1898,7 +1982,10 @@ fn handle_mouse_event(
                 width: size.width,
                 height: size.height,
             };
-            let (_, list_area, _, _) = split_layout(area, app.preview_enabled && !app.history_mode && !app.hosts_mode && !app.reap_mode);
+            let (_, list_area, _, _) = split_layout(
+                area,
+                app.preview_enabled && !app.history_mode && !app.hosts_mode && !app.reap_mode,
+            );
             if let Some(index) = list_index_at(app, list_area, mouse.row, mouse.column) {
                 app.selected = index;
                 app.update_preview(false);
@@ -1933,8 +2020,10 @@ fn handle_mouse_event(
 }
 
 fn draw_ui(f: &mut Frame, app: &App) {
-    let (header_area, list_area, preview_area, footer_area) =
-        split_layout(f.area(), app.preview_enabled && !app.history_mode && !app.hosts_mode && !app.reap_mode);
+    let (header_area, list_area, preview_area, footer_area) = split_layout(
+        f.area(),
+        app.preview_enabled && !app.history_mode && !app.hosts_mode && !app.reap_mode,
+    );
 
     let now_unix = current_unix_timestamp();
     let session_count: usize = app.projects.iter().map(|p| p.sessions.len()).sum();
@@ -2128,12 +2217,21 @@ fn draw_ui(f: &mut Frame, app: &App) {
                 } else if let Some(ref rt) = session.runtime {
                     if rt.host != "local" {
                         let short_host = rt.host.trim_start_matches("ssh://");
-                        format!("  [{}/{}@{}]", session.session.runtime_kind, session.session.backend, short_host)
+                        format!(
+                            "  [{}/{}@{}]",
+                            session.session.runtime_kind, session.session.backend, short_host
+                        )
                     } else {
-                        format!("  [{}/{}]", session.session.runtime_kind, session.session.backend)
+                        format!(
+                            "  [{}/{}]",
+                            session.session.runtime_kind, session.session.backend
+                        )
                     }
                 } else {
-                    format!("  [{}/{}]", session.session.runtime_kind, session.session.backend)
+                    format!(
+                        "  [{}/{}]",
+                        session.session.runtime_kind, session.session.backend
+                    )
                 };
                 spans.push(Span::styled(
                     runtime_label,
@@ -2261,7 +2359,11 @@ fn draw_ui(f: &mut Frame, app: &App) {
                 } else {
                     Span::styled("○", Style::default().fg(Color::DarkGray))
                 };
-                let status_text = if hwl.host.enabled { "enabled" } else { "disabled" };
+                let status_text = if hwl.host.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
 
                 let name_style = if idx == app.selected {
                     Style::default()
@@ -2299,9 +2401,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
                 let threshold = app.reap_threshold_minutes;
                 items.push(ListItem::new(Line::from(Span::styled(
                     format!("IDLE RUNTIMES (>{threshold}m)"),
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ))));
             }
             ViewItem::Idle { idle } => {
@@ -2671,7 +2771,11 @@ fn prompt_backend_selection(
         println!("  {}. {}{}", idx + 1, name, suffix);
     }
     let happy_index = backends.len() + 1;
-    let happy_suffix = if happy_available { "" } else { " (not installed)" };
+    let happy_suffix = if happy_available {
+        ""
+    } else {
+        " (not installed)"
+    };
     println!("  {happy_index}. happy (wrap default: {default_backend}){happy_suffix}");
 
     print!("Backend (enter for default: {default_backend}): ");
@@ -2877,5 +2981,3 @@ fn is_low_disk(usage: disk::DiskUsage) -> bool {
     let free_ratio = usage.available_bytes as f64 / usage.total_bytes as f64;
     usage.available_bytes < LOW_DISK_FREE_BYTES || free_ratio < LOW_DISK_FREE_RATIO
 }
-
-

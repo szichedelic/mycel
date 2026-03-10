@@ -112,7 +112,8 @@ impl SessionManager {
         project_name: &str,
         session_name: &str,
     ) -> Result<()> {
-        self.provider.set_label(runtime_id, project_name, session_name)
+        self.provider
+            .set_label(runtime_id, project_name, session_name)
     }
 }
 
@@ -134,14 +135,26 @@ mod tests {
 
     #[test]
     fn for_kind_str_parses_known_kinds() {
-        assert_eq!(SessionManager::for_kind_str("tmux").kind(), RuntimeKind::Tmux);
-        assert_eq!(SessionManager::for_kind_str("compose").kind(), RuntimeKind::Compose);
-        assert_eq!(SessionManager::for_kind_str("remote").kind(), RuntimeKind::Remote);
+        assert_eq!(
+            SessionManager::for_kind_str("tmux").kind(),
+            RuntimeKind::Tmux
+        );
+        assert_eq!(
+            SessionManager::for_kind_str("compose").kind(),
+            RuntimeKind::Compose
+        );
+        assert_eq!(
+            SessionManager::for_kind_str("remote").kind(),
+            RuntimeKind::Remote
+        );
     }
 
     #[test]
     fn for_kind_str_falls_back_to_tmux() {
-        assert_eq!(SessionManager::for_kind_str("unknown").kind(), RuntimeKind::Tmux);
+        assert_eq!(
+            SessionManager::for_kind_str("unknown").kind(),
+            RuntimeKind::Tmux
+        );
         assert_eq!(SessionManager::for_kind_str("").kind(), RuntimeKind::Tmux);
     }
 

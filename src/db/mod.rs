@@ -659,12 +659,7 @@ impl Database {
     }
 
     #[allow(dead_code)]
-    pub fn update_service_health(
-        &self,
-        service_id: i64,
-        health: &str,
-        status: &str,
-    ) -> Result<()> {
+    pub fn update_service_health(&self, service_id: i64, health: &str, status: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE session_services SET health = ?1, status = ?2 WHERE id = ?3",
             params![health, status, service_id],
@@ -675,10 +670,7 @@ impl Database {
     // -- Joined query: sessions with runtime summaries --
 
     #[allow(dead_code)]
-    pub fn list_sessions_with_runtimes(
-        &self,
-        project_id: i64,
-    ) -> Result<Vec<SessionWithRuntime>> {
+    pub fn list_sessions_with_runtimes(&self, project_id: i64) -> Result<Vec<SessionWithRuntime>> {
         let sessions = self.list_sessions(project_id)?;
         let mut result = Vec::with_capacity(sessions.len());
 
@@ -722,10 +714,9 @@ impl Database {
     }
 
     pub fn remove_host(&self, name: &str) -> Result<bool> {
-        let affected = self.conn.execute(
-            "DELETE FROM hosts WHERE name = ?1",
-            params![name],
-        )?;
+        let affected = self
+            .conn
+            .execute("DELETE FROM hosts WHERE name = ?1", params![name])?;
         Ok(affected > 0)
     }
 
@@ -847,7 +838,8 @@ mod tests {
     }
 
     fn seed_project(db: &Database) -> i64 {
-        db.add_project("test-project", Path::new("/tmp/test")).unwrap()
+        db.add_project("test-project", Path::new("/tmp/test"))
+            .unwrap()
     }
 
     fn seed_session(db: &Database, project_id: i64) -> i64 {
@@ -917,7 +909,9 @@ mod tests {
         db.backfill_tmux_runtimes().unwrap();
         let count: i64 = db
             .conn
-            .query_row("SELECT COUNT(*) FROM session_runtimes", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM session_runtimes", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 1);
     }
@@ -966,11 +960,15 @@ mod tests {
 
         let rt_count: i64 = db
             .conn
-            .query_row("SELECT COUNT(*) FROM session_runtimes", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM session_runtimes", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         let svc_count: i64 = db
             .conn
-            .query_row("SELECT COUNT(*) FROM session_services", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM session_services", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(rt_count, 0);
         assert_eq!(svc_count, 0);

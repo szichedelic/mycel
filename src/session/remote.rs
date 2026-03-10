@@ -52,8 +52,7 @@ impl RemoteProvider {
         worktree_path: &Path,
         backend: &ResolvedBackend,
     ) -> Result<PathBuf> {
-        fs::create_dir_all(compose_dir)
-            .context("Failed to create local compose directory")?;
+        fs::create_dir_all(compose_dir).context("Failed to create local compose directory")?;
 
         let file_path = compose_dir.join("docker-compose.yml");
 
@@ -76,18 +75,13 @@ impl RemoteProvider {
 "#
         );
 
-        fs::write(&file_path, yaml)
-            .context("Failed to write docker-compose.yml")?;
+        fs::write(&file_path, yaml).context("Failed to write docker-compose.yml")?;
 
         Ok(file_path)
     }
 
     /// Copy the compose file to the remote host via scp.
-    fn sync_compose_file(
-        &self,
-        local_path: &Path,
-        remote_dir: &str,
-    ) -> Result<()> {
+    fn sync_compose_file(&self, local_path: &Path, remote_dir: &str) -> Result<()> {
         let ssh_dest = self.ssh_dest();
 
         // Create remote directory
@@ -180,7 +174,9 @@ impl RuntimeProvider for RemoteProvider {
     fn is_alive(&self, runtime_id: &str) -> Result<bool> {
         let output = Command::new("docker")
             .env("DOCKER_HOST", &self.docker_host)
-            .args(["compose", "-p", runtime_id, "ps", "--status", "running", "-q"])
+            .args([
+                "compose", "-p", runtime_id, "ps", "--status", "running", "-q",
+            ])
             .output()
             .context("Failed to check remote compose project status")?;
 
@@ -237,7 +233,11 @@ impl RuntimeProvider for RemoteProvider {
 
         let escaped = text.replace('\'', "'\\''");
         let output = self.run_remote_docker(&[
-            "exec", "-i", &container_id, "sh", "-c",
+            "exec",
+            "-i",
+            &container_id,
+            "sh",
+            "-c",
             &format!("echo '{escaped}'"),
         ])?;
 
@@ -248,12 +248,7 @@ impl RuntimeProvider for RemoteProvider {
         Ok(())
     }
 
-    fn set_label(
-        &self,
-        _runtime_id: &str,
-        _project_name: &str,
-        _session_name: &str,
-    ) -> Result<()> {
+    fn set_label(&self, _runtime_id: &str, _project_name: &str, _session_name: &str) -> Result<()> {
         Ok(())
     }
 }
@@ -303,12 +298,9 @@ mod tests {
             args: vec!["--dangerously-skip-permissions".into()],
         };
 
-        let file = RemoteProvider::generate_compose_file(
-            &tmp,
-            Path::new("/home/user/project"),
-            &backend,
-        )
-        .unwrap();
+        let file =
+            RemoteProvider::generate_compose_file(&tmp, Path::new("/home/user/project"), &backend)
+                .unwrap();
 
         assert!(file.exists());
         let content = fs::read_to_string(&file).unwrap();

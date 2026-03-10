@@ -73,17 +73,21 @@ mod tests {
         db.add_host("idle", "ssh://idle", 4).unwrap();
 
         // Simulate load on "busy" by adding a runtime pointing to its docker_host
-        let pid = db.add_project("test", std::path::Path::new("/tmp/test")).unwrap();
-        let sid = db.add_session(&crate::db::NewSession {
-            project_id: pid,
-            name: "s1",
-            branch_name: "s1",
-            worktree_path: std::path::Path::new("/tmp/wt"),
-            tmux_session: "mycel-test-s1",
-            runtime_kind: "remote",
-            backend: "claude",
-            note: None,
-        }).unwrap();
+        let pid = db
+            .add_project("test", std::path::Path::new("/tmp/test"))
+            .unwrap();
+        let sid = db
+            .add_session(&crate::db::NewSession {
+                project_id: pid,
+                name: "s1",
+                branch_name: "s1",
+                worktree_path: std::path::Path::new("/tmp/wt"),
+                tmux_session: "mycel-test-s1",
+                runtime_kind: "remote",
+                backend: "claude",
+                note: None,
+            })
+            .unwrap();
         db.replace_session_runtime(&crate::db::NewSessionRuntime {
             session_id: sid,
             provider: "remote",
@@ -91,7 +95,8 @@ mod tests {
             runtime_ref: "mycel-test-s1",
             compose_project: None,
             state: "running",
-        }).unwrap();
+        })
+        .unwrap();
 
         let host = pick_host(&db).unwrap();
         assert_eq!(host.name, "idle");

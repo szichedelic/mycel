@@ -38,8 +38,7 @@ impl ComposeProvider {
         worktree_path: &Path,
         backend: &ResolvedBackend,
     ) -> Result<PathBuf> {
-        fs::create_dir_all(compose_dir)
-            .context("Failed to create compose project directory")?;
+        fs::create_dir_all(compose_dir).context("Failed to create compose project directory")?;
 
         let file_path = compose_dir.join("docker-compose.yml");
 
@@ -62,13 +61,16 @@ impl ComposeProvider {
 "#
         );
 
-        fs::write(&file_path, yaml)
-            .context("Failed to write docker-compose.yml")?;
+        fs::write(&file_path, yaml).context("Failed to write docker-compose.yml")?;
 
         Ok(file_path)
     }
 
-    fn run_compose(project_name: &str, compose_dir: &Path, args: &[&str]) -> Result<std::process::Output> {
+    fn run_compose(
+        project_name: &str,
+        compose_dir: &Path,
+        args: &[&str],
+    ) -> Result<std::process::Output> {
         let output = Command::new("docker")
             .arg("compose")
             .arg("-p")
@@ -114,7 +116,9 @@ impl RuntimeProvider for ComposeProvider {
 
     fn is_alive(&self, runtime_id: &str) -> Result<bool> {
         let output = Command::new("docker")
-            .args(["compose", "-p", runtime_id, "ps", "--status", "running", "-q"])
+            .args([
+                "compose", "-p", runtime_id, "ps", "--status", "running", "-q",
+            ])
             .output()
             .context("Failed to check compose project status")?;
 
@@ -170,7 +174,14 @@ impl RuntimeProvider for ComposeProvider {
         }
 
         let status = Command::new("docker")
-            .args(["exec", "-i", &container_id, "sh", "-c", &format!("echo '{}'", text.replace('\'', "'\\''"))])
+            .args([
+                "exec",
+                "-i",
+                &container_id,
+                "sh",
+                "-c",
+                &format!("echo '{}'", text.replace('\'', "'\\''")),
+            ])
             .status()
             .context("Failed to send input to container")?;
 
@@ -181,12 +192,7 @@ impl RuntimeProvider for ComposeProvider {
         Ok(())
     }
 
-    fn set_label(
-        &self,
-        _runtime_id: &str,
-        _project_name: &str,
-        _session_name: &str,
-    ) -> Result<()> {
+    fn set_label(&self, _runtime_id: &str, _project_name: &str, _session_name: &str) -> Result<()> {
         // Compose containers don't have a tmux-style status bar to label.
         // Labels are tracked via the DB session_runtimes table instead.
         Ok(())
@@ -220,12 +226,9 @@ mod tests {
             args: vec!["--dangerously-skip-permissions".into()],
         };
 
-        let file = ComposeProvider::generate_compose_file(
-            &tmp,
-            Path::new("/home/user/project"),
-            &backend,
-        )
-        .unwrap();
+        let file =
+            ComposeProvider::generate_compose_file(&tmp, Path::new("/home/user/project"), &backend)
+                .unwrap();
 
         assert!(file.exists());
         let content = fs::read_to_string(&file).unwrap();

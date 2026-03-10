@@ -155,12 +155,7 @@ impl RuntimeProvider for TmuxProvider {
         Ok(())
     }
 
-    fn set_label(
-        &self,
-        runtime_id: &str,
-        project_name: &str,
-        session_name: &str,
-    ) -> Result<()> {
+    fn set_label(&self, runtime_id: &str, project_name: &str, session_name: &str) -> Result<()> {
         let label = format!(
             "mycel: {}/{}",
             tmux_escape_format(project_name),
