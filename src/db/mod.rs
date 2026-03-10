@@ -49,9 +49,9 @@ pub struct NewSession<'a> {
 
 /// Provider-neutral runtime metadata for a session.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SessionRuntime {
     pub id: i64,
+    #[allow(dead_code)]
     pub session_id: i64,
     pub provider: String,
     pub host: String,

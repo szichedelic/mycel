@@ -29,10 +29,11 @@ use crate::config::{
     available_backend_names, resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig,
 };
 use crate::confirm;
-use crate::db::{Database, NewSession, Project, Session, SessionHistory};
+use crate::db::{Database, NewSession, Project, Session, SessionHistory, SessionRuntime};
 use crate::disk;
 use crate::happy::{apply_happy_wrapper, is_happy_available};
-use crate::session::SessionManager;
+use crate::session::runtime::RuntimeKind;
+use crate::session::{handoff_session, HandoffTarget, SessionManager};
 use crate::worktree;
 
 mod logo;
@@ -71,6 +72,7 @@ struct SessionWithStatus {
     session: Session,
     is_running: bool,
     worktree_bytes: Option<u64>,
+    runtime: Option<SessionRuntime>,
 }
 
 struct HistoryEntry {
@@ -124,7 +126,12 @@ impl App {
             let mut sessions_with_status = Vec::new();
 
             for session in sessions {
-                let sm = SessionManager::for_kind_str(&session.runtime_kind);
+                let runtime = self.db.get_session_runtime(session.id).ok().flatten();
+                let sm = if let Some(ref rt) = runtime {
+                    SessionManager::for_kind_str_with_host(&session.runtime_kind, &rt.host)
+                } else {
+                    SessionManager::for_kind_str(&session.runtime_kind)
+                };
                 let is_running = sm.is_alive(&session.tmux_session).unwrap_or(false);
 
                 sizing_tasks.push((session.id, session.worktree_path.clone()));
@@ -133,6 +140,7 @@ impl App {
                     session,
                     is_running,
                     worktree_bytes: None,
+                    runtime,
                 });
             }
 
@@ -825,6 +833,116 @@ pub async fn run() -> Result<()> {
                                     } else {
                                         println!("Cancelled.");
                                         std::thread::sleep(std::time::Duration::from_millis(500));
+                                    }
+
+                                    enable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        EnterAlternateScreen,
+                                        EnableMouseCapture
+                                    )?;
+                                    terminal.clear()?;
+                                    app.refresh()?;
+                                }
+                            }
+                            KeyCode::Char('d') => {
+                                if let Some(SelectedItem::Session(project, session)) =
+                                    app.get_selected_item()
+                                {
+                                    let session_data = session.session.clone();
+                                    let project_path = project.project.path.clone();
+                                    let project_name = project.project.name.clone();
+                                    let source_kind = session.session.runtime_kind.clone();
+
+                                    disable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        LeaveAlternateScreen,
+                                        DisableMouseCapture
+                                    )?;
+
+                                    println!("Handoff session '{}' (currently on {source_kind})", session_data.name);
+                                    println!("Available targets:");
+                                    let mut targets: Vec<(&str, &str)> = Vec::new();
+                                    if source_kind != "tmux" {
+                                        targets.push(("tmux", "local"));
+                                    }
+                                    if source_kind != "compose" {
+                                        targets.push(("compose", "local"));
+                                    }
+                                    // Add registered remote hosts
+                                    let hosts = app.db.list_hosts().unwrap_or_default();
+                                    for host in &hosts {
+                                        if host.enabled {
+                                            targets.push(("remote", &host.docker_host));
+                                        }
+                                    }
+
+                                    if targets.is_empty() {
+                                        println!("No valid handoff targets available.");
+                                        std::thread::sleep(std::time::Duration::from_millis(1000));
+                                    } else {
+                                        for (idx, (kind, host)) in targets.iter().enumerate() {
+                                            if *host == "local" {
+                                                println!("  {}. {kind}", idx + 1);
+                                            } else {
+                                                println!("  {}. {kind} ({host})", idx + 1);
+                                            }
+                                        }
+
+                                        print!("Target (enter to cancel): ");
+                                        io::stdout().flush()?;
+                                        let mut selection = String::new();
+                                        io::stdin().read_line(&mut selection)?;
+                                        let selection = selection.trim();
+
+                                        if !selection.is_empty() {
+                                            if let Ok(index) = selection.parse::<usize>() {
+                                                if index >= 1 && index <= targets.len() {
+                                                    let (kind_str, host) = targets[index - 1];
+                                                    let dest_kind = RuntimeKind::from_str(kind_str).unwrap();
+
+                                                    let prompt = format!(
+                                                        "Hand off '{}' from {source_kind} to {kind_str}{}?",
+                                                        session_data.name,
+                                                        if host != "local" { format!(" ({host})") } else { String::new() }
+                                                    );
+
+                                                    if confirm::prompt_confirm(&prompt)? {
+                                                        let config = ProjectConfig::load(&project_path)?;
+                                                        let global_config = GlobalConfig::load()?;
+                                                        let backend = resolve_backend(&global_config, &config, Some(&session_data.backend))?;
+                                                        let target = HandoffTarget {
+                                                            kind: dest_kind,
+                                                            host: host.to_string(),
+                                                        };
+
+                                                        println!("Handing off...");
+                                                        match handoff_session(&app.db, &session_data, &project_name, &target, &backend, &config.setup) {
+                                                            Ok(result) => {
+                                                                println!(
+                                                                    "Session '{}' is now running on {} (runtime: {})",
+                                                                    session_data.name, result.new_kind, result.new_runtime_id
+                                                                );
+                                                            }
+                                                            Err(err) => {
+                                                                println!("Handoff failed: {err}");
+                                                            }
+                                                        }
+                                                        std::thread::sleep(std::time::Duration::from_millis(800));
+                                                    } else {
+                                                        println!("Cancelled.");
+                                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                                    }
+                                                } else {
+                                                    println!("Invalid selection.");
+                                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                                }
+                                            } else {
+                                                println!("Invalid selection.");
+                                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                            }
+                                        }
                                     }
 
                                     enable_raw_mode()?;
@@ -1605,6 +1723,13 @@ fn draw_ui(f: &mut Frame, app: &App) {
                 ];
                 let runtime_label = if session.session.runtime_kind == "tmux" {
                     format!("  [{}]", session.session.backend)
+                } else if let Some(ref rt) = session.runtime {
+                    if rt.host != "local" {
+                        let short_host = rt.host.trim_start_matches("ssh://");
+                        format!("  [{}/{}@{}]", session.session.runtime_kind, session.session.backend, short_host)
+                    } else {
+                        format!("  [{}/{}]", session.session.runtime_kind, session.session.backend)
+                    }
                 } else {
                     format!("  [{}/{}]", session.session.runtime_kind, session.session.backend)
                 };
@@ -1768,13 +1893,43 @@ fn draw_ui(f: &mut Frame, app: &App) {
                     "stopped"
                 };
                 let title = format!("Preview: {} ({status})", session.session.name);
-                let body = if !app.preview_text.trim().is_empty() {
-                    app.preview_text.clone()
+
+                let mut body = String::new();
+
+                // Runtime details header
+                body.push_str(&format!("Runtime: {}\n", session.session.runtime_kind));
+                if let Some(ref rt) = session.runtime {
+                    body.push_str(&format!("Host: {}\n", rt.host));
+                    body.push_str(&format!("State: {}\n", rt.state));
+                    body.push_str(&format!("Ref: {}\n", rt.runtime_ref));
+                    if let Some(ref cp) = rt.compose_project {
+                        body.push_str(&format!("Compose project: {cp}\n"));
+                    }
+                    let services = app.db.list_services_for_runtime(rt.id).unwrap_or_default();
+                    if !services.is_empty() {
+                        body.push_str(&format!("Services: {}\n", services.len()));
+                        for svc in &services {
+                            let primary = if svc.is_primary { " (primary)" } else { "" };
+                            let ports = svc.ports.as_deref().unwrap_or("none");
+                            body.push_str(&format!(
+                                "  {} - health:{} status:{} ports:{}{}\n",
+                                svc.service_name, svc.health, svc.status, ports, primary
+                            ));
+                        }
+                    }
+                }
+                body.push_str(&format!("Backend: {}\n", session.session.backend));
+                body.push('\n');
+
+                // Append tmux output below runtime details
+                if !app.preview_text.trim().is_empty() {
+                    body.push_str(&app.preview_text);
                 } else if session.is_running {
-                    "No recent output.".to_string()
+                    body.push_str("No recent output.");
                 } else {
-                    "Session stopped.".to_string()
-                };
+                    body.push_str("Session stopped.");
+                }
+
                 (title, body, Style::default().fg(Color::White))
             }
             _ => (
@@ -1795,7 +1950,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     let mut footer_text = if app.history_mode {
         " [h] sessions  [r]efresh  [/] search  [q]uit".to_string()
     } else {
-        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [r]efresh  [/] search  [q]uit"
+        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [d] handoff  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [r]efresh  [/] search  [q]uit"
             .to_string()
     };
     if app.search_mode || !app.search_query.is_empty() {

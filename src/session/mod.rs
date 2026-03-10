@@ -58,7 +58,6 @@ impl SessionManager {
 
     /// Create a SessionManager from a runtime_kind string and host.
     /// Use when operating on existing sessions that have host metadata.
-    #[allow(dead_code)]
     pub fn for_kind_str_with_host(kind_str: &str, host: &str) -> Self {
         let kind = RuntimeKind::from_str(kind_str).unwrap_or(RuntimeKind::Tmux);
         Self::for_kind_with_host(kind, host)
