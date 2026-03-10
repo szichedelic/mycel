@@ -16,6 +16,21 @@ keys/
 # Plans (local only)
 docs/plans/
 
+# Ralph runtime artifacts
+.ralph/.call_count
+.ralph/.circuit_breaker_history
+.ralph/.circuit_breaker_state
+.ralph/.exit_signals
+.ralph/.last_reset
+.ralph/.loop_start_sha
+.ralph/.ralph_session
+.ralph/.ralph_session_history
+.ralph/live.log
+.ralph/logs/
+.ralph/progress.json
+.ralph/status.json
+.ralph/docs/generated/
+
 
 # Added by cargo
 
