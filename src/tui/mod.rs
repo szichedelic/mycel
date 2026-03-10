@@ -61,6 +61,8 @@ struct App {
     preview_session_id: Option<i64>,
     last_click: Option<ClickState>,
     history_mode: bool,
+    hosts_mode: bool,
+    hosts: Vec<HostWithLoad>,
     disk_rx: Option<mpsc::Receiver<HashMap<i64, Option<u64>>>>,
 }
 
@@ -80,6 +82,11 @@ struct SessionWithStatus {
 struct HistoryEntry {
     project: Project,
     session: SessionHistory,
+}
+
+struct HostWithLoad {
+    host: Host,
+    load: i64,
 }
 
 struct ClickState {
@@ -110,6 +117,8 @@ impl App {
             preview_session_id: None,
             last_click: None,
             history_mode: false,
+            hosts_mode: false,
+            hosts: Vec::new(),
             disk_rx: None,
         };
 
@@ -198,9 +207,20 @@ impl App {
             }
         }
 
+        self.refresh_hosts();
         self.clamp_selection();
         self.update_preview(true);
         Ok(())
+    }
+
+    fn refresh_hosts(&mut self) {
+        self.hosts.clear();
+        if let Ok(hosts) = self.db.list_hosts() {
+            for host in hosts {
+                let load = self.db.count_sessions_on_host(&host.docker_host).unwrap_or(0);
+                self.hosts.push(HostWithLoad { host, load });
+            }
+        }
     }
 
     fn poll_disk_sizes(&mut self) {
@@ -288,7 +308,7 @@ impl App {
     }
 
     fn update_preview(&mut self, force: bool) {
-        if self.history_mode {
+        if self.history_mode || self.hosts_mode {
             if self.preview_session_id.is_some() || !self.preview_text.is_empty() {
                 self.preview_session_id = None;
                 self.preview_text.clear();
@@ -345,7 +365,9 @@ impl App {
             ViewItem::Spacer
             | ViewItem::BankedHeader
             | ViewItem::HistoryHeader
-            | ViewItem::History { .. } => None,
+            | ViewItem::History { .. }
+            | ViewItem::HostsHeader
+            | ViewItem::Host { .. } => None,
         }
     }
 
@@ -409,6 +431,22 @@ impl App {
         let mut items = Vec::new();
         let query = self.search_query.trim();
         let matcher = SkimMatcherV2::default().ignore_case();
+
+        if self.hosts_mode {
+            if self.hosts.is_empty() {
+                return items;
+            }
+            items.push(ViewItem::HostsHeader);
+            for hwl in &self.hosts {
+                let matches = query.is_empty()
+                    || matcher.fuzzy_match(&hwl.host.name, query).is_some()
+                    || matcher.fuzzy_match(&hwl.host.docker_host, query).is_some();
+                if matches {
+                    items.push(ViewItem::Host { hwl });
+                }
+            }
+            return items;
+        }
 
         if self.history_mode {
             let mut matches = Vec::new();
@@ -500,6 +538,10 @@ enum ViewItem<'a> {
     History {
         entry: &'a HistoryEntry,
     },
+    HostsHeader,
+    Host {
+        hwl: &'a HostWithLoad,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -567,6 +609,135 @@ pub async fn run() -> Result<()> {
                             continue;
                         }
 
+                        if app.hosts_mode {
+                            match key.code {
+                                KeyCode::Char('q') => app.should_quit = true,
+                                KeyCode::Char('j') | KeyCode::Down => app.move_down(),
+                                KeyCode::Char('k') | KeyCode::Up => app.move_up(),
+                                KeyCode::Char('/') => app.search_mode = true,
+                                KeyCode::Esc => app.clear_search(),
+                                KeyCode::Char('r') => {
+                                    app.refresh()?;
+                                    terminal.clear()?;
+                                }
+                                KeyCode::Char('g') => {
+                                    app.hosts_mode = false;
+                                    app.selected = 0;
+                                    app.clamp_selection();
+                                    app.update_preview(true);
+                                    terminal.clear()?;
+                                }
+                                KeyCode::Char('t') => {
+                                    // Toggle enable/disable for selected host
+                                    let host_name = {
+                                        let items = app.view_items();
+                                        match items.get(app.selected) {
+                                            Some(ViewItem::Host { hwl }) => Some((hwl.host.name.clone(), hwl.host.enabled)),
+                                            _ => None,
+                                        }
+                                    };
+                                    if let Some((name, currently_enabled)) = host_name {
+                                        let _ = app.db.set_host_enabled(&name, !currently_enabled);
+                                        app.refresh_hosts();
+                                        app.clamp_selection();
+                                    }
+                                }
+                                KeyCode::Char('a') => {
+                                    disable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        LeaveAlternateScreen,
+                                        DisableMouseCapture
+                                    )?;
+
+                                    print!("Host name: ");
+                                    io::stdout().flush()?;
+                                    let mut name = String::new();
+                                    io::stdin().read_line(&mut name)?;
+                                    let name = name.trim();
+
+                                    if !name.is_empty() {
+                                        print!("Docker host URI (e.g. ssh://user@host): ");
+                                        io::stdout().flush()?;
+                                        let mut docker_host = String::new();
+                                        io::stdin().read_line(&mut docker_host)?;
+                                        let docker_host = docker_host.trim();
+
+                                        if !docker_host.is_empty() {
+                                            print!("Max sessions (default 4): ");
+                                            io::stdout().flush()?;
+                                            let mut max_str = String::new();
+                                            io::stdin().read_line(&mut max_str)?;
+                                            let max_sessions: i64 = max_str.trim().parse().unwrap_or(4);
+
+                                            match app.db.add_host(name, docker_host, max_sessions) {
+                                                Ok(_) => {
+                                                    println!("Host '{name}' added.");
+                                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                                }
+                                                Err(err) => {
+                                                    println!("Error adding host: {err}");
+                                                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    enable_raw_mode()?;
+                                    execute!(
+                                        terminal.backend_mut(),
+                                        EnterAlternateScreen,
+                                        EnableMouseCapture
+                                    )?;
+                                    terminal.clear()?;
+                                    app.refresh_hosts();
+                                    app.clamp_selection();
+                                }
+                                KeyCode::Char('x') => {
+                                    let host_name = {
+                                        let items = app.view_items();
+                                        match items.get(app.selected) {
+                                            Some(ViewItem::Host { hwl }) => Some(hwl.host.name.clone()),
+                                            _ => None,
+                                        }
+                                    };
+                                    if let Some(name) = host_name {
+                                        disable_raw_mode()?;
+                                        execute!(
+                                            terminal.backend_mut(),
+                                            LeaveAlternateScreen,
+                                            DisableMouseCapture
+                                        )?;
+
+                                        let prompt = format!("Remove host '{name}'?");
+                                        if confirm::prompt_confirm(&prompt)? {
+                                            if app.db.remove_host(&name)? {
+                                                println!("Host '{name}' removed.");
+                                            } else {
+                                                println!("Host '{name}' not found.");
+                                            }
+                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                        } else {
+                                            println!("Cancelled.");
+                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                        }
+
+                                        enable_raw_mode()?;
+                                        execute!(
+                                            terminal.backend_mut(),
+                                            EnterAlternateScreen,
+                                            EnableMouseCapture
+                                        )?;
+                                        terminal.clear()?;
+                                        app.refresh_hosts();
+                                        app.clamp_selection();
+                                    }
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         match key.code {
                             KeyCode::Char('q') => app.should_quit = true,
                             KeyCode::Char('j') | KeyCode::Down => app.move_down(),
@@ -589,6 +760,13 @@ pub async fn run() -> Result<()> {
                             KeyCode::Char('h') => {
                                 app.history_mode = true;
                                 app.selected = if app.history.is_empty() { 0 } else { 1 };
+                                app.update_preview(true);
+                                terminal.clear()?;
+                            }
+                            KeyCode::Char('g') => {
+                                app.hosts_mode = true;
+                                app.refresh_hosts();
+                                app.selected = if app.hosts.is_empty() { 0 } else { 1 };
                                 app.update_preview(true);
                                 terminal.clear()?;
                             }
@@ -1521,7 +1699,7 @@ fn handle_mouse_event(
                 width: size.width,
                 height: size.height,
             };
-            let (_, list_area, _, _) = split_layout(area, app.preview_enabled && !app.history_mode);
+            let (_, list_area, _, _) = split_layout(area, app.preview_enabled && !app.history_mode && !app.hosts_mode);
             if let Some(index) = list_index_at(app, list_area, mouse.row, mouse.column) {
                 app.selected = index;
                 app.update_preview(false);
@@ -1557,7 +1735,7 @@ fn handle_mouse_event(
 
 fn draw_ui(f: &mut Frame, app: &App) {
     let (header_area, list_area, preview_area, footer_area) =
-        split_layout(f.area(), app.preview_enabled && !app.history_mode);
+        split_layout(f.area(), app.preview_enabled && !app.history_mode && !app.hosts_mode);
 
     let now_unix = current_unix_timestamp();
     let session_count: usize = app.projects.iter().map(|p| p.sessions.len()).sum();
@@ -1872,10 +2050,62 @@ fn draw_ui(f: &mut Frame, app: &App) {
 
                 items.push(ListItem::new(Line::from(spans)));
             }
+            ViewItem::HostsHeader => items.push(ListItem::new(Line::from(Span::styled(
+                "REMOTE HOSTS",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )))),
+            ViewItem::Host { hwl } => {
+                let status_icon = if hwl.host.enabled {
+                    Span::styled("●", Style::default().fg(Color::Green))
+                } else {
+                    Span::styled("○", Style::default().fg(Color::DarkGray))
+                };
+                let status_text = if hwl.host.enabled { "enabled" } else { "disabled" };
+
+                let name_style = if idx == app.selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let line = Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    status_icon,
+                    Span::styled(format!(" {}", hwl.host.name), name_style),
+                    Span::styled(
+                        format!("  {}", hwl.host.docker_host),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("  {status_text}"),
+                        if hwl.host.enabled {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
+                    Span::styled(
+                        format!("  {}/{} sessions", hwl.load, hwl.host.max_sessions),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]);
+
+                items.push(ListItem::new(line));
+            }
         }
     }
 
-    let list_title = if app.history_mode {
+    let list_title = if app.hosts_mode {
+        if query.is_empty() {
+            "Hosts".to_string()
+        } else {
+            format!("Hosts (filter: {query})")
+        }
+    } else if app.history_mode {
         if query.is_empty() {
             "History".to_string()
         } else {
@@ -1888,7 +2118,13 @@ fn draw_ui(f: &mut Frame, app: &App) {
     };
 
     if items.is_empty() {
-        let empty_msg = Paragraph::new(if app.history_mode {
+        let empty_msg = Paragraph::new(if app.hosts_mode {
+            if query.is_empty() {
+                "No hosts registered. Press [a] to add one."
+            } else {
+                "No matching hosts."
+            }
+        } else if app.history_mode {
             if query.is_empty() {
                 "No session history yet."
             } else {
@@ -1972,10 +2208,12 @@ fn draw_ui(f: &mut Frame, app: &App) {
         f.render_widget(preview, preview_area);
     }
 
-    let mut footer_text = if app.history_mode {
+    let mut footer_text = if app.hosts_mode {
+        " [a]dd  [t]oggle  [x] remove  [g] sessions  [r]efresh  [/] search  [q]uit".to_string()
+    } else if app.history_mode {
         " [h] sessions  [r]efresh  [/] search  [q]uit".to_string()
     } else {
-        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [d] handoff  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [r]efresh  [/] search  [q]uit"
+        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [d] handoff  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [g] hosts  [r]efresh  [/] search  [q]uit"
             .to_string()
     };
     if app.search_mode || !app.search_query.is_empty() {
@@ -1985,7 +2223,9 @@ fn draw_ui(f: &mut Frame, app: &App) {
         }
     }
 
-    footer_text.push_str("  mouse: click select, wheel scroll, dbl-click attach");
+    if !app.hosts_mode {
+        footer_text.push_str("  mouse: click select, wheel scroll, dbl-click attach");
+    }
 
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::DarkGray))
