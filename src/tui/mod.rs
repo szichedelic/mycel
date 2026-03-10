@@ -63,6 +63,9 @@ struct App {
     history_mode: bool,
     hosts_mode: bool,
     hosts: Vec<HostWithLoad>,
+    reap_mode: bool,
+    idle_runtimes: Vec<IdleRuntime>,
+    reap_threshold_minutes: u64,
     disk_rx: Option<mpsc::Receiver<HashMap<i64, Option<u64>>>>,
 }
 
@@ -87,6 +90,12 @@ struct HistoryEntry {
 struct HostWithLoad {
     host: Host,
     load: i64,
+}
+
+struct IdleRuntime {
+    session: Session,
+    runtime: SessionRuntime,
+    idle_secs: i64,
 }
 
 struct ClickState {
@@ -119,6 +128,9 @@ impl App {
             history_mode: false,
             hosts_mode: false,
             hosts: Vec::new(),
+            reap_mode: false,
+            idle_runtimes: Vec::new(),
+            reap_threshold_minutes: 60,
             disk_rx: None,
         };
 
@@ -223,6 +235,22 @@ impl App {
         }
     }
 
+    fn refresh_idle_runtimes(&mut self) {
+        self.idle_runtimes.clear();
+        let now = current_unix_timestamp();
+        let cutoff = now - (self.reap_threshold_minutes as i64 * 60);
+        if let Ok(idle) = self.db.find_idle_runtimes(cutoff) {
+            for (session, runtime) in idle {
+                let idle_secs = (now - runtime.last_seen_unix).max(0);
+                self.idle_runtimes.push(IdleRuntime {
+                    session,
+                    runtime,
+                    idle_secs,
+                });
+            }
+        }
+    }
+
     fn poll_disk_sizes(&mut self) {
         let sizes = match self.disk_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             Some(sizes) => sizes,
@@ -308,7 +336,7 @@ impl App {
     }
 
     fn update_preview(&mut self, force: bool) {
-        if self.history_mode || self.hosts_mode {
+        if self.history_mode || self.hosts_mode || self.reap_mode {
             if self.preview_session_id.is_some() || !self.preview_text.is_empty() {
                 self.preview_session_id = None;
                 self.preview_text.clear();
@@ -367,7 +395,9 @@ impl App {
             | ViewItem::HistoryHeader
             | ViewItem::History { .. }
             | ViewItem::HostsHeader
-            | ViewItem::Host { .. } => None,
+            | ViewItem::Host { .. }
+            | ViewItem::IdleHeader
+            | ViewItem::Idle { .. } => None,
         }
     }
 
@@ -431,6 +461,22 @@ impl App {
         let mut items = Vec::new();
         let query = self.search_query.trim();
         let matcher = SkimMatcherV2::default().ignore_case();
+
+        if self.reap_mode {
+            if self.idle_runtimes.is_empty() {
+                return items;
+            }
+            items.push(ViewItem::IdleHeader);
+            for idle in &self.idle_runtimes {
+                let matches = query.is_empty()
+                    || matcher.fuzzy_match(&idle.session.name, query).is_some()
+                    || matcher.fuzzy_match(&idle.runtime.host, query).is_some();
+                if matches {
+                    items.push(ViewItem::Idle { idle });
+                }
+            }
+            return items;
+        }
 
         if self.hosts_mode {
             if self.hosts.is_empty() {
@@ -542,6 +588,10 @@ enum ViewItem<'a> {
     Host {
         hwl: &'a HostWithLoad,
     },
+    IdleHeader,
+    Idle {
+        idle: &'a IdleRuntime,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -603,6 +653,148 @@ pub async fn run() -> Result<()> {
                                     app.clamp_selection();
                                     app.update_preview(true);
                                     terminal.clear()?;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        if app.reap_mode {
+                            match key.code {
+                                KeyCode::Char('q') => app.should_quit = true,
+                                KeyCode::Char('j') | KeyCode::Down => app.move_down(),
+                                KeyCode::Char('k') | KeyCode::Up => app.move_up(),
+                                KeyCode::Char('/') => app.search_mode = true,
+                                KeyCode::Esc => app.clear_search(),
+                                KeyCode::Char('r') => {
+                                    app.refresh_idle_runtimes();
+                                    app.clamp_selection();
+                                }
+                                KeyCode::Char('w') => {
+                                    app.reap_mode = false;
+                                    app.selected = 0;
+                                    app.clamp_selection();
+                                    app.update_preview(true);
+                                    terminal.clear()?;
+                                }
+                                KeyCode::Char('+') => {
+                                    app.reap_threshold_minutes = app.reap_threshold_minutes.saturating_add(30);
+                                    app.refresh_idle_runtimes();
+                                    app.clamp_selection();
+                                }
+                                KeyCode::Char('-') => {
+                                    app.reap_threshold_minutes = app.reap_threshold_minutes.saturating_sub(30).max(10);
+                                    app.refresh_idle_runtimes();
+                                    app.clamp_selection();
+                                }
+                                KeyCode::Char('x') => {
+                                    // Reap selected idle runtime
+                                    let target = {
+                                        let items = app.view_items();
+                                        match items.get(app.selected) {
+                                            Some(ViewItem::Idle { idle }) => Some((
+                                                idle.session.name.clone(),
+                                                idle.session.tmux_session.clone(),
+                                                idle.session.runtime_kind.clone(),
+                                                idle.runtime.id,
+                                            )),
+                                            _ => None,
+                                        }
+                                    };
+                                    if let Some((name, runtime_id, runtime_kind, rt_db_id)) = target {
+                                        disable_raw_mode()?;
+                                        execute!(
+                                            terminal.backend_mut(),
+                                            LeaveAlternateScreen,
+                                            DisableMouseCapture
+                                        )?;
+
+                                        let prompt = format!("Reap idle session '{name}'?");
+                                        if confirm::prompt_confirm(&prompt)? {
+                                            let sm = SessionManager::for_kind_str(&runtime_kind);
+                                            if sm.is_alive(&runtime_id).unwrap_or(false) {
+                                                if let Err(e) = sm.kill(&runtime_id) {
+                                                    println!("Failed to kill {name}: {e}");
+                                                }
+                                            }
+                                            if let Err(e) = app.db.update_runtime_state(rt_db_id, "reaped") {
+                                                println!("Failed to update state: {e}");
+                                            } else {
+                                                println!("Reaped: {name}");
+                                            }
+                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                        } else {
+                                            println!("Cancelled.");
+                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                        }
+
+                                        enable_raw_mode()?;
+                                        execute!(
+                                            terminal.backend_mut(),
+                                            EnterAlternateScreen,
+                                            EnableMouseCapture
+                                        )?;
+                                        terminal.clear()?;
+                                        app.refresh_idle_runtimes();
+                                        app.clamp_selection();
+                                    }
+                                }
+                                KeyCode::Char('c') => {
+                                    // Reap all idle runtimes
+                                    if !app.idle_runtimes.is_empty() {
+                                        disable_raw_mode()?;
+                                        execute!(
+                                            terminal.backend_mut(),
+                                            LeaveAlternateScreen,
+                                            DisableMouseCapture
+                                        )?;
+
+                                        let count = app.idle_runtimes.len();
+                                        let prompt = format!("Reap all {count} idle runtime(s)?");
+                                        if confirm::prompt_confirm(&prompt)? {
+                                            let mut reaped = 0;
+                                            // Collect data to avoid borrow issues
+                                            let targets: Vec<_> = app.idle_runtimes.iter().map(|idle| {
+                                                (
+                                                    idle.session.name.clone(),
+                                                    idle.session.tmux_session.clone(),
+                                                    idle.session.runtime_kind.clone(),
+                                                    idle.runtime.id,
+                                                )
+                                            }).collect();
+
+                                            for (name, runtime_id, runtime_kind, rt_db_id) in &targets {
+                                                let sm = SessionManager::for_kind_str(runtime_kind);
+                                                if sm.is_alive(runtime_id).unwrap_or(false) {
+                                                    if let Err(e) = sm.kill(runtime_id) {
+                                                        println!("  Failed to kill {name}: {e}");
+                                                        continue;
+                                                    }
+                                                }
+                                                if let Err(e) = app.db.update_runtime_state(*rt_db_id, "reaped") {
+                                                    println!("  Failed to update {name}: {e}");
+                                                    continue;
+                                                }
+                                                println!("  Reaped: {name}");
+                                                reaped += 1;
+                                            }
+                                            println!("\nReaped {reaped}/{count} idle runtime(s).");
+                                            std::thread::sleep(std::time::Duration::from_millis(800));
+                                        } else {
+                                            println!("Cancelled.");
+                                            std::thread::sleep(std::time::Duration::from_millis(500));
+                                        }
+
+                                        enable_raw_mode()?;
+                                        execute!(
+                                            terminal.backend_mut(),
+                                            EnterAlternateScreen,
+                                            EnableMouseCapture
+                                        )?;
+                                        terminal.clear()?;
+                                        app.refresh_idle_runtimes();
+                                        app.clamp_selection();
+                                    }
                                 }
                                 _ => {}
                             }
@@ -767,6 +959,13 @@ pub async fn run() -> Result<()> {
                                 app.hosts_mode = true;
                                 app.refresh_hosts();
                                 app.selected = if app.hosts.is_empty() { 0 } else { 1 };
+                                app.update_preview(true);
+                                terminal.clear()?;
+                            }
+                            KeyCode::Char('w') => {
+                                app.reap_mode = true;
+                                app.refresh_idle_runtimes();
+                                app.selected = if app.idle_runtimes.is_empty() { 0 } else { 1 };
                                 app.update_preview(true);
                                 terminal.clear()?;
                             }
@@ -1699,7 +1898,7 @@ fn handle_mouse_event(
                 width: size.width,
                 height: size.height,
             };
-            let (_, list_area, _, _) = split_layout(area, app.preview_enabled && !app.history_mode && !app.hosts_mode);
+            let (_, list_area, _, _) = split_layout(area, app.preview_enabled && !app.history_mode && !app.hosts_mode && !app.reap_mode);
             if let Some(index) = list_index_at(app, list_area, mouse.row, mouse.column) {
                 app.selected = index;
                 app.update_preview(false);
@@ -1735,7 +1934,7 @@ fn handle_mouse_event(
 
 fn draw_ui(f: &mut Frame, app: &App) {
     let (header_area, list_area, preview_area, footer_area) =
-        split_layout(f.area(), app.preview_enabled && !app.history_mode && !app.hosts_mode);
+        split_layout(f.area(), app.preview_enabled && !app.history_mode && !app.hosts_mode && !app.reap_mode);
 
     let now_unix = current_unix_timestamp();
     let session_count: usize = app.projects.iter().map(|p| p.sessions.len()).sum();
@@ -2096,10 +2295,60 @@ fn draw_ui(f: &mut Frame, app: &App) {
 
                 items.push(ListItem::new(line));
             }
+            ViewItem::IdleHeader => {
+                let threshold = app.reap_threshold_minutes;
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("IDLE RUNTIMES (>{threshold}m)"),
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                ))));
+            }
+            ViewItem::Idle { idle } => {
+                let name_style = if idx == app.selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                let idle_age = format_duration(idle.idle_secs);
+
+                let line = Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(&idle.session.name, name_style),
+                    Span::styled(
+                        format!("  [{}]", idle.runtime.provider),
+                        Style::default().fg(Color::Blue),
+                    ),
+                    Span::styled(
+                        format!("  on {}", idle.runtime.host),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("  idle {idle_age}"),
+                        Style::default().fg(Color::Red),
+                    ),
+                    Span::styled(
+                        format!("  state:{}", idle.runtime.state),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]);
+
+                items.push(ListItem::new(line));
+            }
         }
     }
 
-    let list_title = if app.hosts_mode {
+    let list_title = if app.reap_mode {
+        let threshold = app.reap_threshold_minutes;
+        if query.is_empty() {
+            format!("Idle Runtimes (>{threshold}m)")
+        } else {
+            format!("Idle Runtimes (>{threshold}m, filter: {query})")
+        }
+    } else if app.hosts_mode {
         if query.is_empty() {
             "Hosts".to_string()
         } else {
@@ -2118,7 +2367,13 @@ fn draw_ui(f: &mut Frame, app: &App) {
     };
 
     if items.is_empty() {
-        let empty_msg = Paragraph::new(if app.hosts_mode {
+        let empty_msg = Paragraph::new(if app.reap_mode {
+            if query.is_empty() {
+                "No idle runtimes found. Adjust threshold with [+]/[-]."
+            } else {
+                "No matching idle runtimes."
+            }
+        } else if app.hosts_mode {
             if query.is_empty() {
                 "No hosts registered. Press [a] to add one."
             } else {
@@ -2208,12 +2463,14 @@ fn draw_ui(f: &mut Frame, app: &App) {
         f.render_widget(preview, preview_area);
     }
 
-    let mut footer_text = if app.hosts_mode {
+    let mut footer_text = if app.reap_mode {
+        " [x] reap selected  [c] reap all  [+/-] threshold  [w] sessions  [r]efresh  [/] search  [q]uit".to_string()
+    } else if app.hosts_mode {
         " [a]dd  [t]oggle  [x] remove  [g] sessions  [r]efresh  [/] search  [q]uit".to_string()
     } else if app.history_mode {
         " [h] sessions  [r]efresh  [/] search  [q]uit".to_string()
     } else {
-        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [d] handoff  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [g] hosts  [r]efresh  [/] search  [q]uit"
+        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [d] handoff  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [g] hosts  [w] reap  [r]efresh  [/] search  [q]uit"
             .to_string()
     };
     if app.search_mode || !app.search_query.is_empty() {
@@ -2223,7 +2480,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
         }
     }
 
-    if !app.hosts_mode {
+    if !app.hosts_mode && !app.reap_mode {
         footer_text.push_str("  mouse: click select, wheel scroll, dbl-click attach");
     }
 
