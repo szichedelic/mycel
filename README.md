@@ -73,6 +73,18 @@ cp ./target/release/mycel ~/.local/bin/mycel
 
 On macOS you will typically want `~/bin` or `/usr/local/bin` instead.
 
+## Development
+
+Common local checks:
+
+```bash
+cargo fmt
+cargo clippy --all-targets --all-features
+cargo test
+```
+
+Use `cargo run -- --help` to inspect the current CLI while developing.
+
 ## Quick start
 
 Register a repo:
@@ -246,6 +258,14 @@ Find or reap sessions that have gone idle:
 ```bash
 mycel reap --idle-minutes 60 --dry-run
 mycel reap --idle-minutes 60
+```
+
+### Session notifications
+
+Watch running `tmux` sessions and send desktop notifications when a session needs input, reports an error, or stops:
+
+```bash
+mycel notify --interval 5
 ```
 
 ### Web TUI
