@@ -83,7 +83,6 @@ pub struct SessionWithRuntime {
     pub services: Vec<SessionService>,
 }
 
-#[allow(dead_code)]
 pub struct NewSessionRuntime<'a> {
     pub session_id: i64,
     pub provider: &'a str,
@@ -557,7 +556,6 @@ impl Database {
 
     // -- session_runtimes CRUD --
 
-    #[allow(dead_code)]
     pub fn add_session_runtime(&self, rt: &NewSessionRuntime) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO session_runtimes (session_id, provider, host, runtime_ref, compose_project, state)

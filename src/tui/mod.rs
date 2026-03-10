@@ -29,7 +29,9 @@ use crate::config::{
     available_backend_names, resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig,
 };
 use crate::confirm;
-use crate::db::{Database, NewSession, Project, Session, SessionHistory, SessionRuntime};
+use crate::db::{
+    Database, Host, NewSession, NewSessionRuntime, Project, Session, SessionHistory, SessionRuntime,
+};
 use crate::disk;
 use crate::happy::{apply_happy_wrapper, is_happy_available};
 use crate::session::runtime::RuntimeKind;
@@ -611,6 +613,9 @@ pub async fn run() -> Result<()> {
                                     let (backend_override, use_happy) =
                                         prompt_backend_selection(&global_config, &config)?;
 
+                                    let hosts = app.db.list_hosts().unwrap_or_default();
+                                    let runtime_choice = prompt_runtime_selection(&hosts)?;
+
                                     print!("Session name: ");
                                     io::stdout().flush()?;
                                     let mut name = String::new();
@@ -647,28 +652,50 @@ pub async fn run() -> Result<()> {
                                         if use_happy {
                                             apply_happy_wrapper(&mut backend)?;
                                         }
-                                        println!("Starting {} session...", backend.name);
+
+                                        let (chosen_kind, chosen_host) = &runtime_choice;
+                                        let sm = SessionManager::for_kind_with_host(*chosen_kind, chosen_host);
+
+                                        println!("Starting {} session on {}...", backend.name, chosen_kind.as_str());
                                         let setup = merge_setup(&config, template);
                                         if !setup.is_empty() {
                                             println!("Setup: {}", setup.join(" && "));
                                         }
-                                        let tmux_session = app.session_manager.create(
+                                        let runtime_id = sm.create(
                                             &project.name,
                                             &session_id,
                                             &worktree_path,
                                             &setup,
                                             &backend,
                                         )?;
-                                        app.db.add_session(&NewSession {
+                                        let sid = app.db.add_session(&NewSession {
                                             project_id: project.id,
                                             name,
                                             branch_name: &branch_name,
                                             worktree_path: &worktree_path,
-                                            tmux_session: &tmux_session,
-                                            runtime_kind: app.session_manager.kind().as_str(),
+                                            tmux_session: &runtime_id,
+                                            runtime_kind: chosen_kind.as_str(),
                                             backend: &backend.name,
                                             note: note.as_deref(),
                                         })?;
+
+                                        // For non-tmux runtimes, explicitly create the runtime row
+                                        // (tmux sessions are handled by backfill)
+                                        if *chosen_kind != RuntimeKind::Tmux {
+                                            let _ = app.db.replace_session_runtime(&NewSessionRuntime {
+                                                session_id: sid,
+                                                provider: chosen_kind.as_str(),
+                                                host: chosen_host,
+                                                runtime_ref: &runtime_id,
+                                                compose_project: if *chosen_kind == RuntimeKind::Compose || *chosen_kind == RuntimeKind::Remote {
+                                                    Some(&runtime_id)
+                                                } else {
+                                                    None
+                                                },
+                                                state: "running",
+                                            });
+                                        }
+
                                         if let Some(prompt) = template
                                             .and_then(|t| t.prompt.as_deref())
                                             .map(str::trim)
@@ -677,9 +704,7 @@ pub async fn run() -> Result<()> {
                                             std::thread::sleep(std::time::Duration::from_millis(
                                                 600,
                                             ));
-                                            if let Err(err) = app
-                                                .session_manager
-                                                .send_prompt(&tmux_session, prompt)
+                                            if let Err(err) = sm.send_prompt(&runtime_id, prompt)
                                             {
                                                 println!(
                                                     "Warning: failed to send template prompt: {err}"
@@ -2245,6 +2270,60 @@ fn prompt_template_selection(config: &ProjectConfig) -> Result<Option<String>> {
 
     println!("Unknown template '{selection}', continuing without template.");
     Ok(None)
+}
+
+fn prompt_runtime_selection(hosts: &[Host]) -> Result<(RuntimeKind, String)> {
+    let enabled_hosts: Vec<&Host> = hosts.iter().filter(|h| h.enabled).collect();
+
+    // If no remote hosts are registered, skip the prompt and default to tmux
+    if enabled_hosts.is_empty() {
+        println!("Runtime:");
+        println!("  1. tmux (default)");
+        println!("  2. compose (local Docker)");
+        print!("Runtime (enter for tmux): ");
+        io::stdout().flush()?;
+        let mut selection = String::new();
+        io::stdin().read_line(&mut selection)?;
+        let selection = selection.trim();
+        return match selection {
+            "2" | "compose" => Ok((RuntimeKind::Compose, "local".to_string())),
+            _ => Ok((RuntimeKind::Tmux, "local".to_string())),
+        };
+    }
+
+    println!("Runtime:");
+    println!("  1. tmux (default)");
+    println!("  2. compose (local Docker)");
+    for (idx, host) in enabled_hosts.iter().enumerate() {
+        let short = host.docker_host.trim_start_matches("ssh://");
+        println!("  {}. remote ({})", idx + 3, short);
+    }
+
+    print!("Runtime (enter for tmux): ");
+    io::stdout().flush()?;
+    let mut selection = String::new();
+    io::stdin().read_line(&mut selection)?;
+    let selection = selection.trim();
+
+    if selection.is_empty() || selection == "1" || selection == "tmux" {
+        return Ok((RuntimeKind::Tmux, "local".to_string()));
+    }
+
+    if selection == "2" || selection == "compose" {
+        return Ok((RuntimeKind::Compose, "local".to_string()));
+    }
+
+    if let Ok(index) = selection.parse::<usize>() {
+        let host_idx = index.checked_sub(3);
+        if let Some(hi) = host_idx {
+            if hi < enabled_hosts.len() {
+                return Ok((RuntimeKind::Remote, enabled_hosts[hi].docker_host.clone()));
+            }
+        }
+    }
+
+    println!("Unknown selection '{selection}', defaulting to tmux.");
+    Ok((RuntimeKind::Tmux, "local".to_string()))
 }
 
 fn merge_setup(config: &ProjectConfig, template: Option<&TemplateConfig>) -> Vec<String> {
