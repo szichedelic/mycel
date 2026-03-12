@@ -47,9 +47,61 @@ impl RemoteProvider {
         format!("/tmp/mycel-compose/{project_name}-{session_name}")
     }
 
+    fn remote_workspace_dir(project_name: &str, session_name: &str) -> String {
+        format!("mycel-workspaces/{project_name}/{session_name}")
+    }
+
+    /// Rsync the local worktree to the remote host.
+    /// Get the remote user's home directory.
+    fn remote_home(&self) -> Result<String> {
+        let ssh_dest = self.ssh_dest();
+        let output = Command::new("ssh")
+            .args([ssh_dest, "echo", "$HOME"])
+            .output()
+            .context("Failed to get remote home directory")?;
+        if !output.status.success() {
+            anyhow::bail!("Failed to get remote home directory on {ssh_dest}");
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    fn rsync_worktree(
+        &self,
+        local_path: &Path,
+        project_name: &str,
+        session_name: &str,
+    ) -> Result<String> {
+        let relative_dir = Self::remote_workspace_dir(project_name, session_name);
+        let ssh_dest = self.ssh_dest();
+        let home = self.remote_home()?;
+        let absolute_dir = format!("{home}/{relative_dir}");
+
+        let status = Command::new("ssh")
+            .args([ssh_dest, "mkdir", "-p", &absolute_dir])
+            .status()
+            .context("Failed to create remote workspace directory via SSH")?;
+        if !status.success() {
+            anyhow::bail!("ssh mkdir for workspace failed on {ssh_dest}");
+        }
+
+        // rsync the worktree (trailing slash on source means "contents of")
+        let local_str = format!("{}/", local_path.to_string_lossy());
+        let remote_str = format!("{ssh_dest}:{absolute_dir}/");
+        let status = Command::new("rsync")
+            .args(["-az", "--delete", &local_str, &remote_str])
+            .status()
+            .context("Failed to rsync worktree to remote host")?;
+        if !status.success() {
+            anyhow::bail!("rsync to {ssh_dest}:{absolute_dir} failed");
+        }
+
+        Ok(absolute_dir)
+    }
+
     fn generate_compose_file(
         compose_dir: &Path,
-        worktree_path: &Path,
+        remote_workspace: &str,
+        setup_commands: &[String],
         backend: &ResolvedBackend,
     ) -> Result<PathBuf> {
         fs::create_dir_all(compose_dir).context("Failed to create local compose directory")?;
@@ -58,20 +110,23 @@ impl RemoteProvider {
 
         let mut cmd_parts = vec![backend.command.clone()];
         cmd_parts.extend(backend.args.iter().cloned());
-        let command_yaml = serde_json::to_string(&cmd_parts)?;
+        let backend_cmd = shell_escape_args(&cmd_parts);
 
-        let worktree_str = worktree_path.to_string_lossy();
+        let entrypoint = build_remote_entrypoint(setup_commands, &backend_cmd);
 
         let yaml = format!(
             r#"services:
   agent:
-    image: ubuntu:22.04
+    image: mycel-agent:latest
     working_dir: /workspace
     stdin_open: true
     tty: true
     volumes:
-      - {worktree_str}:/workspace
-    command: {command_yaml}
+      - {remote_workspace}:/workspace
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        {entrypoint}
 "#
         );
 
@@ -107,36 +162,148 @@ impl RemoteProvider {
         Ok(())
     }
 
-    /// Run a docker compose command targeting the remote host.
+    /// Run a docker compose command on the remote host via SSH.
     fn run_remote_compose(
         &self,
         project_name: &str,
         remote_dir: &str,
         args: &[&str],
     ) -> Result<std::process::Output> {
+        let ssh_dest = self.ssh_dest();
         let remote_file = format!("{remote_dir}/docker-compose.yml");
-        let output = Command::new("docker")
-            .env("DOCKER_HOST", &self.docker_host)
-            .arg("compose")
-            .arg("-p")
-            .arg(project_name)
-            .arg("-f")
-            .arg(&remote_file)
-            .args(args)
+        let docker_args = format!(
+            "docker compose -p {} -f {} {}",
+            project_name,
+            remote_file,
+            args.join(" ")
+        );
+        let output = Command::new("ssh")
+            .args([ssh_dest, &docker_args])
             .output()
-            .context("Failed to run docker compose on remote host")?;
+            .context("Failed to run docker compose on remote host via SSH")?;
         Ok(output)
     }
 
-    /// Run a docker command targeting the remote host (non-compose).
+    /// Run a docker command on the remote host via SSH.
     fn run_remote_docker(&self, args: &[&str]) -> Result<std::process::Output> {
-        let output = Command::new("docker")
-            .env("DOCKER_HOST", &self.docker_host)
-            .args(args)
+        let ssh_dest = self.ssh_dest();
+        let docker_args = format!("docker {}", args.join(" "));
+        let output = Command::new("ssh")
+            .args([ssh_dest, &docker_args])
             .output()
-            .context("Failed to run docker on remote host")?;
+            .context("Failed to run docker on remote host via SSH")?;
         Ok(output)
     }
+
+    /// Stop all mycel containers and remove workspace data on the remote host.
+    pub fn cleanup_host(&self) -> Result<()> {
+        let ssh_dest = self.ssh_dest();
+
+        // Stop all mycel-* compose projects
+        let output = self.run_remote_docker(&[
+            "ps",
+            "-a",
+            "--filter",
+            "label=com.docker.compose.project",
+            "--format",
+            "{{.Labels}}",
+        ])?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut projects_seen = std::collections::HashSet::new();
+        for line in stdout.lines() {
+            for label in line.split(',') {
+                if let Some(project) = label.strip_prefix("com.docker.compose.project=") {
+                    if project.starts_with("mycel-") {
+                        projects_seen.insert(project.to_string());
+                    }
+                }
+            }
+        }
+
+        for project in &projects_seen {
+            let _ = Command::new("ssh")
+                .args([
+                    ssh_dest,
+                    "docker",
+                    "compose",
+                    "-p",
+                    project,
+                    "down",
+                    "--remove-orphans",
+                ])
+                .status();
+        }
+
+        let _ = Command::new("ssh")
+            .args([
+                ssh_dest,
+                "rm",
+                "-rf",
+                "~/mycel-workspaces/",
+                "/tmp/mycel-compose/",
+            ])
+            .status();
+
+        Ok(())
+    }
+}
+
+/// Build an entrypoint script that installs deps, runs setup commands, then launches the backend.
+/// Used by the local compose provider with bare ubuntu:22.04.
+pub fn build_entrypoint(setup_commands: &[String], backend_cmd: &str) -> String {
+    let mut lines = Vec::new();
+
+    lines
+        .push("apt-get update -qq && apt-get install -y -qq curl git > /dev/null 2>&1".to_string());
+
+    for cmd in setup_commands {
+        lines.push(cmd.clone());
+    }
+
+    lines.push(format!("exec {backend_cmd}"));
+
+    lines.join(" && \\\n        ")
+}
+
+/// Build an entrypoint for the mycel-agent image (deps pre-installed).
+/// Runs setup commands, then `claude login && exec backend`.
+pub fn build_remote_entrypoint(setup_commands: &[String], backend_cmd: &str) -> String {
+    let mut lines = Vec::new();
+
+    for cmd in setup_commands {
+        lines.push(cmd.clone());
+    }
+
+    let login_cmd = if backend_cmd.starts_with("claude") {
+        "claude login"
+    } else if backend_cmd.starts_with("codex") {
+        "codex login"
+    } else {
+        ""
+    };
+
+    if !login_cmd.is_empty() {
+        lines.push(login_cmd.to_string());
+    }
+
+    lines.push(format!("exec {backend_cmd}"));
+
+    lines.join(" && \\\n        ")
+}
+
+/// Shell-escape a list of args into a single command string.
+pub fn shell_escape_args(args: &[String]) -> String {
+    args.iter()
+        .map(|a| {
+            if a.contains(' ') || a.contains('\'') || a.contains('"') || a.contains('$') {
+                format!("'{}'", a.replace('\'', "'\\''"))
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl RuntimeProvider for RemoteProvider {
@@ -149,14 +316,18 @@ impl RuntimeProvider for RemoteProvider {
         project_name: &str,
         session_name: &str,
         worktree_path: &Path,
-        _setup_commands: &[String],
+        setup_commands: &[String],
         backend: &ResolvedBackend,
     ) -> Result<RuntimeSession> {
         let compose_project = Self::compose_project_name(project_name, session_name);
         let local_dir = Self::local_compose_dir(project_name, session_name)?;
         let remote_dir = Self::remote_compose_dir(project_name, session_name);
 
-        let local_file = Self::generate_compose_file(&local_dir, worktree_path, backend)?;
+        // Rsync worktree to remote host
+        let remote_workspace = self.rsync_worktree(worktree_path, project_name, session_name)?;
+
+        let local_file =
+            Self::generate_compose_file(&local_dir, &remote_workspace, setup_commands, backend)?;
         self.sync_compose_file(&local_file, &remote_dir)?;
 
         let output = self.run_remote_compose(&compose_project, &remote_dir, &["up", "-d"])?;
@@ -172,33 +343,26 @@ impl RuntimeProvider for RemoteProvider {
     }
 
     fn is_alive(&self, runtime_id: &str) -> Result<bool> {
-        let output = Command::new("docker")
-            .env("DOCKER_HOST", &self.docker_host)
-            .args([
-                "compose", "-p", runtime_id, "ps", "--status", "running", "-q",
-            ])
-            .output()
-            .context("Failed to check remote compose project status")?;
+        let output = self.run_remote_docker(&[
+            "compose", "-p", runtime_id, "ps", "--status", "running", "-q",
+        ])?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(!stdout.trim().is_empty())
     }
 
     fn attach(&self, runtime_id: &str) -> Result<()> {
-        let output = Command::new("docker")
-            .env("DOCKER_HOST", &self.docker_host)
-            .args(["compose", "-p", runtime_id, "ps", "-q", "agent"])
-            .output()
-            .context("Failed to find remote agent container")?;
+        let output = self.run_remote_docker(&["compose", "-p", runtime_id, "ps", "-q", "agent"])?;
 
         let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if container_id.is_empty() {
             anyhow::bail!("No running agent container found on remote for project {runtime_id}");
         }
 
-        let status = Command::new("docker")
-            .env("DOCKER_HOST", &self.docker_host)
-            .args(["attach", &container_id])
+        // Attach interactively via SSH
+        let ssh_dest = self.ssh_dest();
+        let status = Command::new("ssh")
+            .args(["-t", ssh_dest, "docker", "attach", &container_id])
             .status()
             .context("Failed to attach to remote container")?;
 
@@ -210,9 +374,17 @@ impl RuntimeProvider for RemoteProvider {
     }
 
     fn kill(&self, runtime_id: &str) -> Result<()> {
-        let status = Command::new("docker")
-            .env("DOCKER_HOST", &self.docker_host)
-            .args(["compose", "-p", runtime_id, "down", "--remove-orphans"])
+        let ssh_dest = self.ssh_dest();
+        let status = Command::new("ssh")
+            .args([
+                ssh_dest,
+                "docker",
+                "compose",
+                "-p",
+                runtime_id,
+                "down",
+                "--remove-orphans",
+            ])
             .status()
             .context("Failed to stop remote compose project")?;
 
@@ -282,13 +454,19 @@ mod tests {
     }
 
     #[test]
+    fn remote_workspace_dir_is_under_opt() {
+        let dir = RemoteProvider::remote_workspace_dir("myapp", "feat-auth");
+        assert_eq!(dir, "mycel-workspaces/myapp/feat-auth");
+    }
+
+    #[test]
     fn local_compose_dir_is_under_data_dir() {
         let dir = RemoteProvider::local_compose_dir("myapp", "feat-auth").unwrap();
         assert!(dir.ends_with("mycel/remote-compose/myapp-feat-auth"));
     }
 
     #[test]
-    fn generate_compose_file_creates_yaml() {
+    fn generate_compose_file_creates_yaml_with_remote_workspace() {
         let tmp = std::env::temp_dir().join("mycel-test-remote-compose");
         let _ = fs::remove_dir_all(&tmp);
 
@@ -298,14 +476,47 @@ mod tests {
             args: vec!["--dangerously-skip-permissions".into()],
         };
 
-        let file =
-            RemoteProvider::generate_compose_file(&tmp, Path::new("/home/user/project"), &backend)
-                .unwrap();
+        let file = RemoteProvider::generate_compose_file(
+            &tmp,
+            "mycel-workspaces/myapp/feat-auth",
+            &["curl -fsSL https://example.com/install.sh | sh".to_string()],
+            &backend,
+        )
+        .unwrap();
 
         assert!(file.exists());
         let content = fs::read_to_string(&file).unwrap();
         assert!(content.contains("services:"));
         assert!(content.contains("agent:"));
+        assert!(content.contains("mycel-workspaces/myapp/feat-auth:/workspace"));
+        assert!(content.contains("mycel-agent:latest"));
+        assert!(!content.contains("/home/user/project"));
+        assert!(!content.contains("apt-get update"));
+        assert!(content.contains("curl -fsSL"));
+        assert!(content.contains("claude login"));
+        assert!(content.contains("claude"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn generate_compose_file_no_setup_commands() {
+        let tmp = std::env::temp_dir().join("mycel-test-remote-compose-no-setup");
+        let _ = fs::remove_dir_all(&tmp);
+
+        let backend = ResolvedBackend {
+            name: "codex".into(),
+            command: "codex".into(),
+            args: vec![],
+        };
+
+        let file =
+            RemoteProvider::generate_compose_file(&tmp, "mycel-workspaces/p/s", &[], &backend)
+                .unwrap();
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert!(content.contains("codex login"));
+        assert!(content.contains("exec codex"));
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -314,5 +525,29 @@ mod tests {
     fn provider_reports_remote_kind() {
         let provider = RemoteProvider::new("ssh://user@host".into());
         assert_eq!(provider.kind(), RuntimeKind::Remote);
+    }
+
+    #[test]
+    fn build_entrypoint_includes_deps_and_setup() {
+        let result = build_entrypoint(
+            &["pip install foo".to_string(), "npm install".to_string()],
+            "claude --dangerously-skip-permissions",
+        );
+        assert!(result.contains("apt-get update"));
+        assert!(result.contains("pip install foo"));
+        assert!(result.contains("npm install"));
+        assert!(result.contains("exec claude --dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn shell_escape_args_handles_simple_args() {
+        let args = vec!["claude".to_string(), "--flag".to_string()];
+        assert_eq!(shell_escape_args(&args), "claude --flag");
+    }
+
+    #[test]
+    fn shell_escape_args_handles_spaces() {
+        let args = vec!["echo".to_string(), "hello world".to_string()];
+        assert_eq!(shell_escape_args(&args), "echo 'hello world'");
     }
 }
