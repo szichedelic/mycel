@@ -35,7 +35,10 @@ use crate::db::{
 use crate::disk;
 use crate::happy::{apply_happy_wrapper, is_happy_available};
 use crate::session::runtime::RuntimeKind;
-use crate::session::{handoff_session, HandoffTarget, SessionManager};
+use crate::session::{
+    handoff_session, maybe_clear_host_project, prepare_host_for_project, HandoffTarget,
+    SessionManager,
+};
 use crate::worktree;
 
 mod logo;
@@ -90,6 +93,7 @@ struct HistoryEntry {
 struct HostWithLoad {
     host: Host,
     load: i64,
+    project_name: Option<String>,
 }
 
 struct IdleRuntime {
@@ -233,7 +237,12 @@ impl App {
                     .db
                     .count_sessions_on_host(&host.docker_host)
                     .unwrap_or(0);
-                self.hosts.push(HostWithLoad { host, load });
+                let project_name = self.db.get_host_project_name(host.id).unwrap_or(None);
+                self.hosts.push(HostWithLoad {
+                    host,
+                    load,
+                    project_name,
+                });
             }
         }
     }
@@ -390,7 +399,7 @@ impl App {
         self.view_items().len()
     }
 
-    fn get_selected_item(&self) -> Option<SelectedItem> {
+    fn get_selected_item(&self) -> Option<SelectedItem<'_>> {
         let items = self.view_items();
         let item = items.get(self.selected)?;
         match item {
@@ -1076,6 +1085,22 @@ pub async fn run() -> Result<()> {
                                         }
 
                                         let (chosen_kind, chosen_host) = &runtime_choice;
+
+                                        if *chosen_kind == RuntimeKind::Remote {
+                                            let hosts = app.db.list_hosts().unwrap_or_default();
+                                            if let Some(host) =
+                                                hosts.iter().find(|h| h.docker_host == *chosen_host)
+                                            {
+                                                if let Err(e) = prepare_host_for_project(
+                                                    &app.db, host, project.id,
+                                                ) {
+                                                    println!(
+                                                        "Warning: host preparation failed: {e}"
+                                                    );
+                                                }
+                                            }
+                                        }
+
                                         let sm = SessionManager::for_kind_with_host(
                                             *chosen_kind,
                                             chosen_host,
@@ -1310,6 +1335,7 @@ pub async fn run() -> Result<()> {
                                     let session_data = session.session.clone();
                                     let project_path = project.project.path.clone();
                                     let project_name = project.project.name.clone();
+                                    let project_id = project.project.id;
                                     let source_kind = session.session.runtime_kind.clone();
 
                                     disable_raw_mode()?;
@@ -1379,6 +1405,25 @@ pub async fn run() -> Result<()> {
                                                             &config,
                                                             Some(&session_data.backend),
                                                         )?;
+                                                        if dest_kind == RuntimeKind::Remote {
+                                                            let hosts = app
+                                                                .db
+                                                                .list_hosts()
+                                                                .unwrap_or_default();
+                                                            if let Some(h) = hosts
+                                                                .iter()
+                                                                .find(|h| h.docker_host == host)
+                                                            {
+                                                                if let Err(e) =
+                                                                    prepare_host_for_project(
+                                                                        &app.db, h, project_id,
+                                                                    )
+                                                                {
+                                                                    println!("Warning: host preparation failed: {e}");
+                                                                }
+                                                            }
+                                                        }
+
                                                         let target = HandoffTarget {
                                                             kind: dest_kind,
                                                             host: host.to_string(),
@@ -1448,6 +1493,12 @@ pub async fn run() -> Result<()> {
                                     let worktree_path = session.session.worktree_path.clone();
                                     let project_path = project.project.path.clone();
                                     let runtime_kind = session.session.runtime_kind.clone();
+                                    let runtime_host = app
+                                        .db
+                                        .get_session_runtime(session_id)
+                                        .ok()
+                                        .flatten()
+                                        .map(|r| r.host.clone());
 
                                     disable_raw_mode()?;
                                     execute!(
@@ -1462,7 +1513,14 @@ pub async fn run() -> Result<()> {
                                     let confirmed = confirm::prompt_confirm(&prompt)?;
 
                                     if confirmed {
-                                        let sm = SessionManager::for_kind_str(&runtime_kind);
+                                        let sm = if let Some(ref host) = runtime_host {
+                                            SessionManager::for_kind_str_with_host(
+                                                &runtime_kind,
+                                                host,
+                                            )
+                                        } else {
+                                            SessionManager::for_kind_str(&runtime_kind)
+                                        };
                                         if sm.is_alive(&tmux_session)? {
                                             sm.kill(&tmux_session)?;
                                         }
@@ -1485,6 +1543,12 @@ pub async fn run() -> Result<()> {
                                         )?;
 
                                         app.db.delete_session(session_id)?;
+
+                                        if let Some(ref host) = runtime_host {
+                                            if host != "local" {
+                                                let _ = maybe_clear_host_project(&app.db, host);
+                                            }
+                                        }
                                     } else {
                                         println!("Cancelled.");
                                         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -2392,6 +2456,18 @@ fn draw_ui(f: &mut Frame, app: &App) {
                     Span::styled(
                         format!("  {}/{} sessions", hwl.load, hwl.host.max_sessions),
                         Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        if let Some(ref pname) = hwl.project_name {
+                            format!("  project: {pname}")
+                        } else {
+                            "  (available)".to_string()
+                        },
+                        if hwl.project_name.is_some() {
+                            Style::default().fg(Color::Cyan)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
                     ),
                 ]);
 
