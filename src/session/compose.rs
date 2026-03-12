@@ -36,17 +36,19 @@ impl ComposeProvider {
     fn generate_compose_file(
         compose_dir: &Path,
         worktree_path: &Path,
+        setup_commands: &[String],
         backend: &ResolvedBackend,
     ) -> Result<PathBuf> {
         fs::create_dir_all(compose_dir).context("Failed to create compose project directory")?;
 
         let file_path = compose_dir.join("docker-compose.yml");
 
+        let worktree_str = worktree_path.to_string_lossy();
+
         let mut cmd_parts = vec![backend.command.clone()];
         cmd_parts.extend(backend.args.iter().cloned());
-        let command_yaml = serde_json::to_string(&cmd_parts)?;
-
-        let worktree_str = worktree_path.to_string_lossy();
+        let backend_cmd = super::remote::shell_escape_args(&cmd_parts);
+        let entrypoint = super::remote::build_entrypoint(setup_commands, &backend_cmd);
 
         let yaml = format!(
             r#"services:
@@ -57,7 +59,10 @@ impl ComposeProvider {
     tty: true
     volumes:
       - {worktree_str}:/workspace
-    command: {command_yaml}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        {entrypoint}
 "#
         );
 
@@ -94,13 +99,13 @@ impl RuntimeProvider for ComposeProvider {
         project_name: &str,
         session_name: &str,
         worktree_path: &Path,
-        _setup_commands: &[String],
+        setup_commands: &[String],
         backend: &ResolvedBackend,
     ) -> Result<RuntimeSession> {
         let compose_project = Self::compose_project_name(project_name, session_name);
         let compose_dir = Self::compose_dir(project_name, session_name)?;
 
-        Self::generate_compose_file(&compose_dir, worktree_path, backend)?;
+        Self::generate_compose_file(&compose_dir, worktree_path, setup_commands, backend)?;
 
         let output = Self::run_compose(&compose_project, &compose_dir, &["up", "-d"])?;
         if !output.status.success() {
@@ -193,8 +198,6 @@ impl RuntimeProvider for ComposeProvider {
     }
 
     fn set_label(&self, _runtime_id: &str, _project_name: &str, _session_name: &str) -> Result<()> {
-        // Compose containers don't have a tmux-style status bar to label.
-        // Labels are tracked via the DB session_runtimes table instead.
         Ok(())
     }
 }
@@ -226,9 +229,13 @@ mod tests {
             args: vec!["--dangerously-skip-permissions".into()],
         };
 
-        let file =
-            ComposeProvider::generate_compose_file(&tmp, Path::new("/home/user/project"), &backend)
-                .unwrap();
+        let file = ComposeProvider::generate_compose_file(
+            &tmp,
+            Path::new("/home/user/project"),
+            &[],
+            &backend,
+        )
+        .unwrap();
 
         assert!(file.exists());
         let content = fs::read_to_string(&file).unwrap();
@@ -236,6 +243,33 @@ mod tests {
         assert!(content.contains("agent:"));
         assert!(content.contains("/home/user/project:/workspace"));
         assert!(content.contains("ubuntu:22.04"));
+        assert!(content.contains("apt-get update"));
+        assert!(content.contains("exec claude"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn generate_compose_file_includes_setup_commands() {
+        let tmp = std::env::temp_dir().join("mycel-test-compose-setup");
+        let _ = fs::remove_dir_all(&tmp);
+
+        let backend = ResolvedBackend {
+            name: "claude".into(),
+            command: "claude".into(),
+            args: vec![],
+        };
+
+        let file = ComposeProvider::generate_compose_file(
+            &tmp,
+            Path::new("/workspace"),
+            &["npm install".to_string()],
+            &backend,
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert!(content.contains("npm install"));
 
         let _ = fs::remove_dir_all(&tmp);
     }
