@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::config::ResolvedBackend;
+use crate::db::{Database, Host};
 
 pub mod compose;
 pub mod handoff;
@@ -115,6 +116,49 @@ impl SessionManager {
         self.provider
             .set_label(runtime_id, project_name, session_name)
     }
+}
+
+/// Prepare a remote host for a project. If the host is already assigned to a different
+/// project, stop all sessions on it and clean up before switching.
+pub fn prepare_host_for_project(db: &Database, host: &Host, project_id: i64) -> Result<()> {
+    if host.current_project_id == Some(project_id) {
+        return Ok(());
+    }
+
+    if let Some(_old_project_id) = host.current_project_id {
+        let sessions = db
+            .find_sessions_on_host(&host.docker_host)
+            .context("Failed to find sessions on host")?;
+
+        for (_session, runtime) in &sessions {
+            let kind = RuntimeKind::from_str(&runtime.provider).unwrap_or(RuntimeKind::Remote);
+            let sm = SessionManager::for_kind_with_host(kind, &runtime.host);
+            if sm.is_alive(&runtime.runtime_ref).unwrap_or(false) {
+                let _ = sm.kill(&runtime.runtime_ref);
+            }
+            let _ = db.update_runtime_state(runtime.id, "stopped");
+        }
+
+        let provider = RemoteProvider::new(host.docker_host.clone());
+        let _ = provider.cleanup_host();
+    }
+
+    db.set_host_project(&host.name, Some(project_id))?;
+    Ok(())
+}
+
+/// Clear host project assignment if no running sessions remain.
+pub fn maybe_clear_host_project(db: &Database, docker_host: &str) -> Result<()> {
+    let count = db.count_sessions_on_host(docker_host)?;
+    if count == 0 {
+        let hosts = db.list_hosts()?;
+        for host in &hosts {
+            if host.docker_host == docker_host {
+                db.set_host_project(&host.name, None)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
