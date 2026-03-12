@@ -101,6 +101,7 @@ pub struct Host {
     pub docker_host: String,
     pub max_sessions: i64,
     pub enabled: bool,
+    pub current_project_id: Option<i64>,
 }
 
 impl Database {
@@ -176,6 +177,7 @@ impl Database {
         self.ensure_session_runtimes_table()?;
         self.ensure_session_services_table()?;
         self.ensure_hosts_table()?;
+        self.ensure_hosts_current_project()?;
         self.backfill_tmux_runtimes()?;
         Ok(())
     }
@@ -705,6 +707,23 @@ impl Database {
         Ok(())
     }
 
+    fn ensure_hosts_current_project(&self) -> Result<()> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('hosts') WHERE name = 'current_project_id'",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if count == 0 {
+            self.conn.execute(
+                "ALTER TABLE hosts ADD COLUMN current_project_id INTEGER REFERENCES projects(id)",
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
     pub fn add_host(&self, name: &str, docker_host: &str, max_sessions: i64) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO hosts (name, docker_host, max_sessions) VALUES (?1, ?2, ?3)",
@@ -722,7 +741,7 @@ impl Database {
 
     pub fn list_hosts(&self) -> Result<Vec<Host>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, docker_host, max_sessions, enabled FROM hosts ORDER BY name",
+            "SELECT id, name, docker_host, max_sessions, enabled, current_project_id FROM hosts ORDER BY name",
         )?;
 
         let hosts = stmt
@@ -733,6 +752,7 @@ impl Database {
                     docker_host: row.get(2)?,
                     max_sessions: row.get(3)?,
                     enabled: row.get::<_, i32>(4)? != 0,
+                    current_project_id: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -743,7 +763,7 @@ impl Database {
     #[allow(dead_code)]
     pub fn get_host_by_name(&self, name: &str) -> Result<Option<Host>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, docker_host, max_sessions, enabled FROM hosts WHERE name = ?1",
+            "SELECT id, name, docker_host, max_sessions, enabled, current_project_id FROM hosts WHERE name = ?1",
         )?;
 
         let result = stmt.query_row(params![name], |row| {
@@ -753,6 +773,7 @@ impl Database {
                 docker_host: row.get(2)?,
                 max_sessions: row.get(3)?,
                 enabled: row.get::<_, i32>(4)? != 0,
+                current_project_id: row.get(5)?,
             })
         });
 
@@ -769,6 +790,75 @@ impl Database {
             params![enabled as i32, name],
         )?;
         Ok(affected > 0)
+    }
+
+    pub fn set_host_project(&self, host_name: &str, project_id: Option<i64>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE hosts SET current_project_id = ?1 WHERE name = ?2",
+            params![project_id, host_name],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_host_project_name(&self, host_id: i64) -> Result<Option<String>> {
+        let result: rusqlite::Result<Option<String>> = self.conn.query_row(
+            "SELECT p.name FROM hosts h
+             LEFT JOIN projects p ON h.current_project_id = p.id
+             WHERE h.id = ?1",
+            params![host_id],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(name) => Ok(name),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn find_sessions_on_host(
+        &self,
+        docker_host: &str,
+    ) -> Result<Vec<(Session, SessionRuntime)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.name, COALESCE(s.branch_name, s.name), s.worktree_path, s.tmux_session,
+                    COALESCE(s.runtime_kind, 'tmux'), s.backend, s.note,
+                    CAST(strftime('%s', s.created_at) AS INTEGER),
+                    r.id, r.session_id, r.provider, r.host, r.runtime_ref, r.compose_project,
+                    r.state, CAST(strftime('%s', r.last_seen) AS INTEGER)
+             FROM sessions s
+             JOIN session_runtimes r ON r.session_id = s.id
+             WHERE r.host = ?1 AND r.state = 'running'",
+        )?;
+
+        let rows = stmt
+            .query_map(params![docker_host], |row| {
+                let session = Session {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    branch_name: row.get(2)?,
+                    worktree_path: PathBuf::from(row.get::<_, String>(3)?),
+                    tmux_session: row.get(4)?,
+                    runtime_kind: row.get(5)?,
+                    backend: row.get(6)?,
+                    note: row.get(7)?,
+                    created_at_unix: row.get(8)?,
+                };
+                let runtime = SessionRuntime {
+                    id: row.get(9)?,
+                    session_id: row.get(10)?,
+                    provider: row.get(11)?,
+                    host: row.get(12)?,
+                    runtime_ref: row.get(13)?,
+                    compose_project: row.get(14)?,
+                    state: row.get(15)?,
+                    last_seen_unix: row.get(16)?,
+                };
+                Ok((session, runtime))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows)
     }
 
     /// Count active sessions on a given host.
