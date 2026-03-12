@@ -1178,4 +1178,80 @@ mod tests {
         db.update_runtime_state(rt.id, "stopped").unwrap();
         assert_eq!(db.count_sessions_on_host("local").unwrap(), 0);
     }
+
+    #[test]
+    fn set_and_get_host_project() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        db.add_host("devbox", "ssh://user@devbox", 4).unwrap();
+
+        // Initially no project
+        let host = db.get_host_by_name("devbox").unwrap().unwrap();
+        assert!(host.current_project_id.is_none());
+        assert!(db.get_host_project_name(host.id).unwrap().is_none());
+
+        // Set project
+        db.set_host_project("devbox", Some(pid)).unwrap();
+        let host = db.get_host_by_name("devbox").unwrap().unwrap();
+        assert_eq!(host.current_project_id, Some(pid));
+        assert_eq!(
+            db.get_host_project_name(host.id).unwrap().as_deref(),
+            Some("test-project")
+        );
+
+        // Clear project
+        db.set_host_project("devbox", None).unwrap();
+        let host = db.get_host_by_name("devbox").unwrap().unwrap();
+        assert!(host.current_project_id.is_none());
+    }
+
+    #[test]
+    fn find_sessions_on_host_returns_running() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        let sid = db
+            .add_session(&NewSession {
+                project_id: pid,
+                name: "remote-s1",
+                branch_name: "remote-s1",
+                worktree_path: Path::new("/tmp/wt"),
+                tmux_session: "mycel-test-remote-s1",
+                runtime_kind: "remote",
+                backend: "claude",
+                note: None,
+            })
+            .unwrap();
+        db.replace_session_runtime(&NewSessionRuntime {
+            session_id: sid,
+            provider: "remote",
+            host: "ssh://devbox",
+            runtime_ref: "mycel-test-remote-s1",
+            compose_project: Some("mycel-test-remote-s1"),
+            state: "running",
+        })
+        .unwrap();
+
+        let sessions = db.find_sessions_on_host("ssh://devbox").unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].0.name, "remote-s1");
+
+        // No sessions on other hosts
+        assert!(db.find_sessions_on_host("ssh://other").unwrap().is_empty());
+
+        // Mark as stopped — should not appear
+        let rt = db.get_session_runtime(sid).unwrap().unwrap();
+        db.update_runtime_state(rt.id, "stopped").unwrap();
+        assert!(db.find_sessions_on_host("ssh://devbox").unwrap().is_empty());
+    }
+
+    #[test]
+    fn hosts_include_current_project_id_in_list() {
+        let db = in_memory_db();
+        let pid = seed_project(&db);
+        db.add_host("devbox", "ssh://user@devbox", 4).unwrap();
+        db.set_host_project("devbox", Some(pid)).unwrap();
+
+        let hosts = db.list_hosts().unwrap();
+        assert_eq!(hosts[0].current_project_id, Some(pid));
+    }
 }
