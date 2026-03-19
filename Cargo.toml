@@ -32,6 +32,9 @@ toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 dirs = "5"
 
+# Agent attention detection
+poke = { git = "https://github.com/szichedelic/poke", optional = true }
+
 # Utils
 anyhow = "1"
 thiserror = "2"
@@ -42,6 +45,10 @@ libc = "0.2"
 flate2 = "1"
 tar = "0.4"
 glob = "0.3"
+
+[features]
+default = ["poke"]
+poke = ["dep:poke"]
 
 [profile.release]
 lto = true
