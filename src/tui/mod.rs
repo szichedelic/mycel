@@ -2107,6 +2107,12 @@ fn draw_ui(f: &mut Frame, app: &App) {
         .flat_map(|p| &p.sessions)
         .filter(|s| s.is_running)
         .count();
+    let waiting_count: usize = app
+        .projects
+        .iter()
+        .flat_map(|p| &p.sessions)
+        .filter(|s| s.waiting)
+        .count();
     let history_count = app.history.len();
     let total_history_secs: i64 = app
         .history
@@ -2207,6 +2213,16 @@ fn draw_ui(f: &mut Frame, app: &App) {
                     format!("{running_count} running"),
                     Style::default().fg(Color::Green),
                 ),
+                if waiting_count > 0 {
+                    Span::styled(
+                        format!("  {waiting_count} waiting"),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    Span::styled("", Style::default())
+                },
                 if !app.banked.is_empty() {
                     Span::styled(
                         format!("  │  {} banked", app.banked.len()),
