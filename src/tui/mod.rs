@@ -40,6 +40,7 @@ use crate::session::{
     SessionManager,
 };
 use crate::worktree;
+use crate::attention;
 
 mod logo;
 
@@ -83,6 +84,7 @@ struct SessionWithStatus {
     is_running: bool,
     worktree_bytes: Option<u64>,
     runtime: Option<SessionRuntime>,
+    waiting: bool,
 }
 
 struct HistoryEntry {
@@ -148,6 +150,12 @@ impl App {
 
         let mut sizing_tasks: Vec<(i64, PathBuf)> = Vec::new();
 
+        // Build a set of tmux sessions that have agents waiting for attention
+        let waiting_sessions: std::collections::HashSet<String> = attention::scan_waiting()
+            .into_iter()
+            .map(|s| s.tmux_session)
+            .collect();
+
         for project in projects {
             let sessions = self.db.list_sessions(project.id).unwrap_or_default();
             let mut sessions_with_status = Vec::new();
@@ -160,6 +168,7 @@ impl App {
                     SessionManager::for_kind_str(&session.runtime_kind)
                 };
                 let is_running = sm.is_alive(&session.tmux_session).unwrap_or(false);
+                let waiting = waiting_sessions.contains(&session.tmux_session);
 
                 sizing_tasks.push((session.id, session.worktree_path.clone()));
 
@@ -168,6 +177,7 @@ impl App {
                     is_running,
                     worktree_bytes: None,
                     runtime,
+                    waiting,
                 });
             }
 
@@ -2274,8 +2284,16 @@ fn draw_ui(f: &mut Frame, app: &App) {
                         },
                         Style::default().fg(Color::DarkGray),
                     ),
-                    Span::styled(format!("  {age}"), Style::default().fg(Color::DarkGray)),
                 ];
+                if session.waiting {
+                    spans.push(Span::styled(
+                        " WAITING",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                spans.push(Span::styled(format!("  {age}"), Style::default().fg(Color::DarkGray)));
                 let runtime_label = if session.session.runtime_kind == "tmux" {
                     format!("  [{}]", session.session.backend)
                 } else if let Some(ref rt) = session.runtime {
