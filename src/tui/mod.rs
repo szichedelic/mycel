@@ -365,6 +365,31 @@ impl App {
         Ok(())
     }
 
+    /// Find the first session with a waiting agent and attach to it.
+    fn attach_first_waiting_session(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> Result<()> {
+        // Find the view-item index and session data for the first waiting session
+        let waiting_idx = {
+            let items = self.view_items();
+            items.iter().enumerate().find_map(|(idx, item)| {
+                if let ViewItem::Session { session, .. } = item {
+                    if session.waiting {
+                        return Some(idx);
+                    }
+                }
+                None
+            })
+        };
+
+        if let Some(idx) = waiting_idx {
+            self.selected = idx;
+            self.attach_selected_session(terminal)?;
+        }
+        Ok(())
+    }
+
     fn update_preview(&mut self, force: bool) {
         if self.history_mode || self.hosts_mode || self.reap_mode {
             if self.preview_session_id.is_some() || !self.preview_text.is_empty() {
@@ -1032,6 +1057,9 @@ pub async fn run() -> Result<()> {
                                 app.selected = if app.idle_runtimes.is_empty() { 0 } else { 1 };
                                 app.update_preview(true);
                                 terminal.clear()?;
+                            }
+                            KeyCode::Char('W') => {
+                                app.attach_first_waiting_session(&mut terminal)?;
                             }
                             KeyCode::Char('s') => {
                                 let project = match app.get_selected_item() {
@@ -2680,7 +2708,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     } else if app.history_mode {
         " [h] sessions  [r]efresh  [/] search  [q]uit".to_string()
     } else {
-        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [d] handoff  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [h]istory  [g] hosts  [w] reap  [r]efresh  [/] search  [q]uit"
+        " [a]ttach  [s]pawn  [n]ote  [m] rename  [p]ause  [d] handoff  [v]iew  [b]ank  [u]nbank  [e]xport  [i]mport  [x] kill  [W] poke  [h]istory  [g] hosts  [w] reap  [r]efresh  [/] search  [q]uit"
             .to_string()
     };
     if app.search_mode || !app.search_query.is_empty() {
