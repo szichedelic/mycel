@@ -2,9 +2,9 @@
 
 ## High Priority
 - [x] [#102] Add poke as a dependency for agent attention detection
-- [ ] [#103] Show agent attention indicators in session list
-- [ ] [#105] Add agent attention count to TUI status bar
-- [ ] [#104] Add keybinding to switch to waiting agent from TUI
+- [x] [#103] Show agent attention indicators in session list
+- [x] [#105] Add agent attention count to TUI status bar
+- [x] [#104] Add keybinding to switch to waiting agent from TUI
 
 ## Medium Priority
 
