@@ -178,7 +178,13 @@ impl RemoteProvider {
             args.join(" ")
         );
         let output = Command::new("ssh")
-            .args([ssh_dest, &docker_args])
+            .args([
+                "-o", "ConnectTimeout=5",
+                "-o", "ServerAliveInterval=5",
+                "-o", "ServerAliveCountMax=1",
+                ssh_dest,
+                &docker_args,
+            ])
             .output()
             .context("Failed to run docker compose on remote host via SSH")?;
         Ok(output)
@@ -189,7 +195,13 @@ impl RemoteProvider {
         let ssh_dest = self.ssh_dest();
         let docker_args = format!("docker {}", args.join(" "));
         let output = Command::new("ssh")
-            .args([ssh_dest, &docker_args])
+            .args([
+                "-o", "ConnectTimeout=5",
+                "-o", "ServerAliveInterval=5",
+                "-o", "ServerAliveCountMax=1",
+                ssh_dest,
+                &docker_args,
+            ])
             .output()
             .context("Failed to run docker on remote host via SSH")?;
         Ok(output)
