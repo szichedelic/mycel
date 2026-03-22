@@ -24,6 +24,7 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::attention;
 use crate::bank::{self, BankedItem};
 use crate::config::{
     available_backend_names, resolve_backend, GlobalConfig, ProjectConfig, TemplateConfig,
@@ -40,7 +41,6 @@ use crate::session::{
     SessionManager,
 };
 use crate::worktree;
-use crate::attention;
 
 mod logo;
 
@@ -2337,7 +2337,10 @@ fn draw_ui(f: &mut Frame, app: &App) {
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
-                spans.push(Span::styled(format!("  {age}"), Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    format!("  {age}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
                 let runtime_label = if session.session.runtime_kind == "tmux" {
                     format!("  [{}]", session.session.backend)
                 } else if let Some(ref rt) = session.runtime {
