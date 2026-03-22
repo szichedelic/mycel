@@ -179,9 +179,12 @@ impl RemoteProvider {
         );
         let output = Command::new("ssh")
             .args([
-                "-o", "ConnectTimeout=5",
-                "-o", "ServerAliveInterval=5",
-                "-o", "ServerAliveCountMax=1",
+                "-o",
+                "ConnectTimeout=5",
+                "-o",
+                "ServerAliveInterval=5",
+                "-o",
+                "ServerAliveCountMax=1",
                 ssh_dest,
                 &docker_args,
             ])
@@ -196,9 +199,12 @@ impl RemoteProvider {
         let docker_args = format!("docker {}", args.join(" "));
         let output = Command::new("ssh")
             .args([
-                "-o", "ConnectTimeout=5",
-                "-o", "ServerAliveInterval=5",
-                "-o", "ServerAliveCountMax=1",
+                "-o",
+                "ConnectTimeout=5",
+                "-o",
+                "ServerAliveInterval=5",
+                "-o",
+                "ServerAliveCountMax=1",
                 ssh_dest,
                 &docker_args,
             ])
